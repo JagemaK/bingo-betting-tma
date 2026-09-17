@@ -244,9 +244,10 @@ export class LedgerService {
     playerId: string,
     username: string,
     amount: number,
-    paymentMethod: string
+    paymentMethod: string = 'Telebirr',
+    referenceId?: string
   ): DepositRequest {
-    const row = databaseService.createDepositRequest(playerId, username, amount, paymentMethod);
+    const row = databaseService.createDepositRequest(playerId, username, amount, paymentMethod, referenceId);
     return {
       id: row.id,
       playerId: row.user_id,

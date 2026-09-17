@@ -28,6 +28,7 @@ import { UserAccount, UserProfile } from '../types/bingo.js';
 import { soundService } from '../services/soundService.js';
 import { telegramSdk } from '../services/telegramSdk.js';
 import { useAuth } from '../services/authContext.js';
+import { apiUrl } from '../config/api.js';
 
 interface UserProfileDrawerProps {
   isOpen: boolean;
@@ -79,7 +80,7 @@ export const UserProfileDrawer: React.FC<UserProfileDrawerProps> = ({
     const token = sessionToken || localStorage.getItem('bingo_auth_token');
     if (!token) return;
 
-    fetch('/api/profile', {
+    fetch(apiUrl('/api/profile'), {
       headers: {
         Authorization: `Bearer ${token}`
       }

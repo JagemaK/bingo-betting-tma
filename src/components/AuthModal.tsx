@@ -23,6 +23,7 @@ import { UserAccount } from '../types/bingo.js';
 import { soundService } from '../services/soundService.js';
 import { telegramSdk } from '../services/telegramSdk.js';
 import { useAuth } from '../services/authContext.js';
+import { apiUrl } from '../config/api.js';
 
 export type AuthModalMode =
   | 'teaser'
@@ -213,7 +214,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`/api/auth/registration-status/${pendingPhone}`);
+        const res = await fetch(apiUrl(`/api/auth/registration-status/${pendingPhone}`));
         if (res.ok) {
           const data = await res.json();
           if (data.status === 'verified' && data.user) {
@@ -241,7 +242,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`/api/auth/forgot-password-status/${pendingPhone}`);
+        const res = await fetch(apiUrl(`/api/auth/forgot-password-status/${pendingPhone}`));
         if (res.ok) {
           const data = await res.json();
           if (data.status === 'authorized' && data.resetToken) {
@@ -297,7 +298,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     telegramSdk.triggerHaptic('medium');
 
     try {
-      const res = await fetch('/api/auth/register-initiate', {
+      const res = await fetch(apiUrl('/api/auth/register-initiate'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -334,7 +335,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     try {
       const guestId = `usr_${Date.now().toString(36)}`;
       const guestName = `Player_${Math.floor(1000 + Math.random() * 9000)}`;
-      const res = await fetch('/api/user/sync', {
+      const res = await fetch(apiUrl('/api/user/sync'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -367,7 +368,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     telegramSdk.triggerHaptic('medium');
 
     try {
-      const res = await fetch(`/api/auth/registration-status/${checkTargetPhone}`);
+      const res = await fetch(apiUrl(`/api/auth/registration-status/${checkTargetPhone}`));
       const data = await res.json();
 
       if (data.status === 'verified' && data.user) {
@@ -412,7 +413,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     telegramSdk.triggerHaptic('medium');
 
     try {
-      const res = await fetch('/api/auth/login', {
+      const res = await fetch(apiUrl('/api/auth/login'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone: phone.trim(), password })
@@ -522,7 +523,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     telegramSdk.triggerHaptic('medium');
 
     try {
-      const res = await fetch('/api/auth/forgot-password-initiate', {
+      const res = await fetch(apiUrl('/api/auth/forgot-password-initiate'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone: resetPhone.trim() })
@@ -561,7 +562,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     telegramSdk.triggerHaptic('medium');
 
     try {
-      const res = await fetch(`/api/auth/forgot-password-status/${checkTargetPhone}`);
+      const res = await fetch(apiUrl(`/api/auth/forgot-password-status/${checkTargetPhone}`));
       const data = await res.json();
 
       if (data.status === 'authorized' && data.resetToken) {
@@ -607,7 +608,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     telegramSdk.triggerHaptic('medium');
 
     try {
-      const res = await fetch('/api/auth/forgot-password-complete', {
+      const res = await fetch(apiUrl('/api/auth/forgot-password-complete'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

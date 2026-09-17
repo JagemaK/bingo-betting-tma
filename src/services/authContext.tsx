@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { UserAccount } from '../types/bingo.js';
 import { telegramSdk } from './telegramSdk.js';
+import { apiUrl } from '../config/api.js';
 
 export type AuthStateStatus =
   | 'UNINITIALIZED'
@@ -79,7 +80,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (initData) {
       setStatus('AUTHENTICATING');
       try {
-        const res = await fetch('/api/auth/telegram', {
+        const res = await fetch(apiUrl('/api/auth/telegram'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ initData, referralCode: startParam })
@@ -131,7 +132,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const existingToken = localStorage.getItem('bingo_auth_token');
     if (existingToken) {
       try {
-        const res = await fetch('/api/auth/session', {
+        const res = await fetch(apiUrl('/api/auth/session'), {
           headers: { Authorization: `Bearer ${existingToken}` }
         });
         if (res.ok) {
@@ -165,7 +166,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setError(null);
 
       try {
-        const res = await fetch('/api/auth/register', {
+        const res = await fetch(apiUrl('/api/auth/register'), {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -207,7 +208,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const token = sessionToken || localStorage.getItem('bingo_auth_token');
     if (token) {
       try {
-        await fetch('/api/auth/logout', {
+        await fetch(apiUrl('/api/auth/logout'), {
           method: 'POST',
           headers: { Authorization: `Bearer ${token}` }
         });

@@ -18,6 +18,7 @@ import {
 import { ReferralStats, CurrencyType, UserAccount } from '../types/bingo.js';
 import { soundService } from '../services/soundService.js';
 import { telegramSdk } from '../services/telegramSdk.js';
+import { apiUrl } from '../config/api.js';
 
 interface ReferralModalProps {
   isOpen: boolean;
@@ -53,7 +54,7 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
 
   useEffect(() => {
     if (isOpen && user?.playerId) {
-      fetch(`/api/referral/${user.playerId}`)
+      fetch(apiUrl(`/api/referral/${user.playerId}`))
         .then((res) => res.json())
         .then((data) => setStats(data))
         .catch(console.error);
@@ -82,7 +83,7 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
     // Credit user
     if (user) {
       try {
-        const res = await fetch('/api/wallet/deposit', {
+        const res = await fetch(apiUrl('/api/wallet/deposit'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ playerId: user.playerId, amount, paymentMethod: 'STREAK_REWARD' })
@@ -105,7 +106,7 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
 
     if (user) {
       try {
-        const res = await fetch('/api/wallet/deposit', {
+        const res = await fetch(apiUrl('/api/wallet/deposit'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ playerId: user.playerId, amount: reward, paymentMethod: 'MISSION_REWARD' })
@@ -122,7 +123,7 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
     if (!user?.playerId || !stats || stats.pendingClaimUSD <= 0) return;
     setClaiming(true);
     try {
-      const res = await fetch('/api/referral/claim', {
+      const res = await fetch(apiUrl('/api/referral/claim'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ playerId: user.playerId })

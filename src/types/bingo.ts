@@ -226,3 +226,70 @@ export interface AdminUserDetail {
   created_at: string;
   last_login_at: string;
 }
+
+export interface DailyJackpotTicket {
+  id: string;
+  round_id: string;
+  card_number: number;
+  user_id: string;
+  username: string;
+  price: number;
+  grid_json: string;
+  fingerprint_hash: string;
+  purchased_at: string;
+}
+
+export interface DailyJackpotPublicState {
+  roundId: string;
+  date: string;
+  status: 'SCHEDULED' | 'REGISTRATION_OPEN' | 'REGISTRATION_CLOSED' | 'CHECKING_ELIGIBILITY' | 'POSTPONED' | 'JACKPOT_READY' | 'GAME_RUNNING' | 'WINNER_FOUND' | 'JACKPOT_PAID' | 'COMPLETED';
+  cardsSold: number;
+  maxCards: number;
+  minCards: number;
+  cardPrice: number;
+  jackpotAmount: number;
+  cutoffTime: string;
+  serverTime: string;
+  isPostponed: boolean;
+  postponementMessage: string | null;
+  myTickets: DailyJackpotTicket[];
+  winner?: {
+    username: string;
+    cardNumber: number;
+    amount: number;
+  } | null;
+}
+
+export interface DailyJackpotAdminRound {
+  id: string;
+  round_id?: string;
+  jackpot_date?: string;
+  date_str?: string;
+  date?: string;
+  status: string;
+  cards_sold: number;
+  gross_sales?: number;
+  gross_card_sales?: number;
+  jackpot_amount?: number;
+  calculated_jackpot?: number;
+  calculatedJackpot?: number;
+  platform_retained_amount?: number;
+  calculatedPlatformRetained?: number;
+  cutoff_time?: string;
+  cutoff_at?: string;
+  checked_at?: string;
+  postponed_reason?: string;
+  postponement_reason?: string;
+  winner_user_id?: string;
+  winner_ticket_id?: string;
+  winner_card_number?: number;
+  winner_payout_amount?: number;
+  payout_status?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface DailyJackpotAdminState {
+  currentRound: DailyJackpotAdminRound;
+  history: DailyJackpotAdminRound[];
+}

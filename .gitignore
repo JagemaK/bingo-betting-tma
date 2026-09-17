@@ -49,6 +49,10 @@ vite.config.ts.timestamp-*
 .eslintcache
 
 # Database files
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
 data/*.db
 data/*.db-wal
 data/*.db-shm

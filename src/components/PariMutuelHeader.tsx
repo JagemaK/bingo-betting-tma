@@ -30,7 +30,7 @@ export const PariMutuelHeader: React.FC<PariMutuelHeaderProps> = ({
   const houseRakePct = isFivePlayerBonus ? 0 : 20;
   const houseRakeAmt = Number(((totalPot * houseRakePct) / 100).toFixed(2));
 
-  const formatCurrency = (val: number) => `${val.toLocaleString()} Birr`;
+  const formatCurrency = (val: number) => `${((val ?? 0)).toLocaleString()} Birr`;
   const isReady = totalCardsSold >= minCardsToStart;
 
   return (

@@ -1,6 +1,7 @@
 import { createRequire } from 'module';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 
 const require = createRequire(import.meta.url);
 const { DatabaseSync } = require('node:sqlite');
@@ -147,6 +148,39 @@ export interface PendingRegistrationRow {
   expires_at: string;
 }
 
+export interface DailyJackpotRoundRow {
+  id: string;
+  date_str: string;
+  status: 'SCHEDULED' | 'REGISTRATION_OPEN' | 'REGISTRATION_CLOSED' | 'CHECKING_ELIGIBILITY' | 'POSTPONED' | 'JACKPOT_READY' | 'GAME_RUNNING' | 'WINNER_FOUND' | 'JACKPOT_PAID' | 'COMPLETED';
+  cards_sold: number;
+  gross_sales: number;
+  jackpot_amount: number;
+  platform_retained_amount: number;
+  cutoff_at: string;
+  checked_at?: string;
+  postponement_reason?: string;
+  winner_user_id?: string;
+  winner_ticket_id?: string;
+  winner_card_number?: number;
+  winner_username?: string;
+  payout_status: 'PENDING' | 'PAID' | 'NOT_APPLICABLE';
+  paid_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DailyJackpotTicketRow {
+  id: string;
+  round_id: string;
+  card_number: number;
+  user_id: string;
+  username: string;
+  price: number;
+  grid_json: string;
+  fingerprint_hash: string;
+  purchased_at: string;
+}
+
 export class DatabaseService {
   private db: any;
   private isMemory: boolean;
@@ -200,6 +234,50 @@ export class DatabaseService {
         console.log('[DatabaseService] Running migration: adding password_salt to users table');
         this.db.exec('ALTER TABLE users ADD COLUMN password_salt TEXT DEFAULT NULL;');
       }
+
+      // Telebirr reference uniqueness database-level constraint
+      this.db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_deposits_reference_unique ON deposit_requests(reference_id) WHERE reference_id IS NOT NULL;');
+
+      // Daily Grand Jackpot tables
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS daily_jackpot_rounds (
+          id TEXT PRIMARY KEY,
+          date_str TEXT NOT NULL UNIQUE,
+          status TEXT NOT NULL DEFAULT 'REGISTRATION_OPEN' CHECK(status IN ('SCHEDULED', 'REGISTRATION_OPEN', 'REGISTRATION_CLOSED', 'CHECKING_ELIGIBILITY', 'POSTPONED', 'JACKPOT_READY', 'GAME_RUNNING', 'WINNER_FOUND', 'JACKPOT_PAID', 'COMPLETED')),
+          cards_sold INTEGER NOT NULL DEFAULT 0 CHECK(cards_sold >= 0 AND cards_sold <= 200),
+          gross_sales REAL NOT NULL DEFAULT 0.0 CHECK(gross_sales >= 0.0),
+          jackpot_amount REAL NOT NULL DEFAULT 0.0 CHECK(jackpot_amount >= 0.0),
+          platform_retained_amount REAL NOT NULL DEFAULT 0.0,
+          cutoff_at TEXT NOT NULL,
+          checked_at TEXT,
+          postponement_reason TEXT,
+          winner_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+          winner_ticket_id TEXT,
+          winner_card_number INTEGER,
+          winner_username TEXT,
+          payout_status TEXT NOT NULL DEFAULT 'PENDING' CHECK(payout_status IN ('PENDING', 'PAID', 'NOT_APPLICABLE')),
+          paid_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_daily_jackpot_date ON daily_jackpot_rounds(date_str);
+        CREATE INDEX IF NOT EXISTS idx_daily_jackpot_status ON daily_jackpot_rounds(status);
+
+        CREATE TABLE IF NOT EXISTS daily_jackpot_tickets (
+          id TEXT PRIMARY KEY,
+          round_id TEXT NOT NULL REFERENCES daily_jackpot_rounds(id) ON DELETE CASCADE,
+          card_number INTEGER NOT NULL CHECK(card_number >= 1 AND card_number <= 200),
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          username TEXT NOT NULL,
+          price REAL NOT NULL DEFAULT 999.0,
+          grid_json TEXT NOT NULL,
+          fingerprint_hash TEXT NOT NULL,
+          purchased_at TEXT NOT NULL,
+          UNIQUE(round_id, card_number)
+        );
+        CREATE INDEX IF NOT EXISTS idx_daily_jackpot_tickets_round ON daily_jackpot_tickets(round_id);
+        CREATE INDEX IF NOT EXISTS idx_daily_jackpot_tickets_user ON daily_jackpot_tickets(user_id);
+      `);
     } catch (err) {
       console.error('[DatabaseService] Migration check warning:', err);
     }
@@ -441,8 +519,10 @@ export class DatabaseService {
 
   public updateWalletBalance(userId: string, balance: number, reserved: number = 0): void {
     this.getOrCreateWallet(userId);
+    const cleanBalance = Math.round(balance * 100) / 100;
+    const cleanReserved = Math.round(reserved * 100) / 100;
     this.db.prepare(`UPDATE wallets SET balance = ?, reserved_balance = ?, updated_at = ? WHERE user_id = ?`)
-      .run(balance, reserved, new Date().toISOString(), userId);
+      .run(cleanBalance, cleanReserved, new Date().toISOString(), userId);
   }
 
   public recordLedgerTransaction(data: {
@@ -468,13 +548,14 @@ export class DatabaseService {
       const balanceBefore = wallet.balance;
       let balanceAfter = balanceBefore;
 
+      const cleanAmount = Math.round(data.amount * 100) / 100;
       if (['DEPOSIT', 'WIN_PAYOUT', 'REFUND', 'BONUS', 'ADMIN_ADJUSTMENT'].includes(data.type)) {
-        balanceAfter = balanceBefore + data.amount;
+        balanceAfter = Math.round((balanceBefore + cleanAmount) * 100) / 100;
       } else if (['BET', 'WITHDRAWAL', 'LOSS'].includes(data.type)) {
-        if (balanceBefore < data.amount) {
-          throw new Error(`Insufficient wallet balance: required ${data.amount.toFixed(2)}, available ${balanceBefore.toFixed(2)}`);
+        if (balanceBefore < cleanAmount) {
+          throw new Error(`Insufficient wallet balance: required ${cleanAmount.toFixed(2)}, available ${balanceBefore.toFixed(2)}`);
         }
-        balanceAfter = balanceBefore - data.amount;
+        balanceAfter = Math.round((balanceBefore - cleanAmount) * 100) / 100;
       }
 
       if (balanceAfter < 0) {
@@ -545,18 +626,57 @@ export class DatabaseService {
 
   // ==================== DEPOSITS ====================
 
-  public createDepositRequest(userId: string, username: string, amount: number, paymentMethod: string): DepositRow {
-    const id = `dep_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-    const now = new Date().toISOString();
+  public createDepositRequest(
+    userId: string,
+    username: string,
+    amount: number,
+    paymentMethod: string = 'Telebirr',
+    referenceId?: string
+  ): DepositRow {
+    return this.transaction(() => {
+      const id = `dep_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const now = new Date().toISOString();
+      const normalizedPaymentMethod = 'Telebirr'; // Strictly enforce Telebirr
+      const cleanRef = referenceId?.trim() ? referenceId.trim().toUpperCase() : null;
 
-    const stmt = this.db.prepare(`
-      INSERT INTO deposit_requests (
-        id, user_id, username, amount, payment_method, status, created_at
-      ) VALUES (?, ?, ?, ?, ?, 'PENDING', ?)
-    `);
-    stmt.run(id, userId, username, amount, paymentMethod, now);
+      // Telebirr reference uniqueness & duplicate check
+      if (cleanRef) {
+        const existingDeposit = this.db.prepare(
+          "SELECT id FROM deposit_requests WHERE UPPER(reference_id) = ? AND status IN ('PENDING', 'APPROVED')"
+        ).get(cleanRef);
+        if (existingDeposit) {
+          throw new Error(`This Telebirr transaction reference (${cleanRef}) has already been submitted or credited.`);
+        }
 
-    return this.getDepositRequest(id)!;
+        const existingTx = this.db.prepare(
+          "SELECT id FROM ledger_transactions WHERE UPPER(reference_id) = ?"
+        ).get(cleanRef);
+        if (existingTx) {
+          throw new Error(`This Telebirr transaction reference (${cleanRef}) has already been credited in the ledger.`);
+        }
+      }
+
+      const cleanAmount = Math.round(amount * 100) / 100;
+      if (cleanAmount <= 0) {
+        throw new Error('Deposit amount must be greater than zero');
+      }
+
+      try {
+        const stmt = this.db.prepare(`
+          INSERT INTO deposit_requests (
+            id, user_id, username, amount, payment_method, status, reference_id, created_at
+          ) VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?)
+        `);
+        stmt.run(id, userId, username, cleanAmount, normalizedPaymentMethod, cleanRef, now);
+      } catch (err: any) {
+        if (err.message && err.message.includes('UNIQUE constraint failed')) {
+          throw new Error(`This Telebirr transaction reference (${cleanRef}) has already been submitted or credited.`);
+        }
+        throw err;
+      }
+
+      return this.getDepositRequest(id)!;
+    });
   }
 
   public getDepositRequest(id: string): DepositRow | undefined {
@@ -580,12 +700,16 @@ export class DatabaseService {
       if (deposit.status !== 'PENDING') throw new Error(`Deposit is already ${deposit.status}`);
 
       const now = new Date().toISOString();
+      // Atomic conditional update guaranteeing exactly 1 approval under concurrency
       const updateStmt = this.db.prepare(`
         UPDATE deposit_requests
         SET status = 'APPROVED', processed_at = ?, processed_by = ?
-        WHERE id = ?
+        WHERE id = ? AND status = 'PENDING'
       `);
-      updateStmt.run(now, adminId, depositId);
+      const updateRes = updateStmt.run(now, adminId, depositId);
+      if (updateRes.changes === 0) {
+        throw new Error(`Deposit request is no longer in PENDING status or was already processed`);
+      }
 
       // Credit wallet and record ledger entry
       const { entry, wallet } = this.recordLedgerTransaction({
@@ -594,7 +718,7 @@ export class DatabaseService {
         type: 'DEPOSIT',
         amount: deposit.amount,
         description: `Deposit via ${deposit.payment_method} approved by ${adminId}`,
-        referenceId: `dep_appr_${depositId}`
+        referenceId: deposit.reference_id || `dep_appr_${depositId}`
       });
 
       this.recordAuditLog({
@@ -602,7 +726,7 @@ export class DatabaseService {
         action: 'APPROVE_DEPOSIT',
         targetUserId: deposit.user_id,
         targetRecordId: depositId,
-        metadata: { amount: deposit.amount, paymentMethod: deposit.payment_method }
+        metadata: { amount: deposit.amount, paymentMethod: deposit.payment_method, referenceId: deposit.reference_id }
       });
 
       return { deposit: this.getDepositRequest(depositId)!, entry, wallet };
@@ -616,19 +740,23 @@ export class DatabaseService {
       if (deposit.status !== 'PENDING') throw new Error(`Deposit is already ${deposit.status}`);
 
       const now = new Date().toISOString();
+      // Atomic conditional update
       const updateStmt = this.db.prepare(`
         UPDATE deposit_requests
         SET status = 'REJECTED', processed_at = ?, processed_by = ?, rejection_reason = ?
-        WHERE id = ?
+        WHERE id = ? AND status = 'PENDING'
       `);
-      updateStmt.run(now, adminId, reason || 'Rejected by administrator', depositId);
+      const updateRes = updateStmt.run(now, adminId, reason || 'Rejected by administrator', depositId);
+      if (updateRes.changes === 0) {
+        throw new Error(`Deposit request is no longer in PENDING status or was already processed`);
+      }
 
       this.recordAuditLog({
         adminUserId: adminId,
         action: 'REJECT_DEPOSIT',
         targetUserId: deposit.user_id,
         targetRecordId: depositId,
-        metadata: { reason }
+        metadata: { reason, referenceId: deposit.reference_id }
       });
 
       return this.getDepositRequest(depositId)!;
@@ -639,19 +767,23 @@ export class DatabaseService {
 
   public createWithdrawalRequest(userId: string, username: string, amount: number, address: string): WithdrawalRow {
     return this.transaction(() => {
-      const wallet = this.getOrCreateWallet(userId);
-      if (wallet.balance < amount) {
-        throw new Error(`Insufficient funds: balance is ${wallet.balance.toFixed(2)}, cannot withdraw ${amount.toFixed(2)}`);
+      const cleanAmount = Math.round(amount * 100) / 100;
+      if (cleanAmount <= 0) {
+        throw new Error('Withdrawal amount must be greater than zero');
       }
 
       const now = new Date().toISOString();
-      const newBalance = wallet.balance - amount;
-      const newReserved = wallet.reserved_balance + amount;
+      // Atomic balance reservation: only deduct if available balance is >= amount
+      const updateRes = this.db.prepare(`
+        UPDATE wallets
+        SET balance = balance - ?, reserved_balance = reserved_balance + ?, updated_at = ?
+        WHERE user_id = ? AND balance >= ?
+      `).run(cleanAmount, cleanAmount, now, userId, cleanAmount);
 
-      // Reserve funds immediately
-      this.db.prepare(`
-        UPDATE wallets SET balance = ?, reserved_balance = ?, updated_at = ? WHERE user_id = ?
-      `).run(newBalance, newReserved, now, userId);
+      if (updateRes.changes === 0) {
+        const wallet = this.getOrCreateWallet(userId);
+        throw new Error(`Insufficient funds: balance is ${wallet.balance.toFixed(2)}, cannot withdraw ${cleanAmount.toFixed(2)}`);
+      }
 
       const id = `wth_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
       const stmt = this.db.prepare(`
@@ -659,7 +791,7 @@ export class DatabaseService {
           id, user_id, username, amount, address, status, created_at
         ) VALUES (?, ?, ?, ?, ?, 'PENDING', ?)
       `);
-      stmt.run(id, userId, username, amount, address, now);
+      stmt.run(id, userId, username, cleanAmount, address, now);
 
       return this.getWithdrawalRequest(id)!;
     });
@@ -687,26 +819,32 @@ export class DatabaseService {
         throw new Error(`Withdrawal is already ${withdrawal.status}`);
       }
 
-      const wallet = this.getWallet(withdrawal.user_id);
-      if (!wallet || wallet.reserved_balance < withdrawal.amount) {
+      const now = new Date().toISOString();
+
+      // Atomic update of withdrawal request
+      const updateRes = this.db.prepare(`
+        UPDATE withdrawal_requests
+        SET status = 'APPROVED', processed_at = ?, processed_by = ?
+        WHERE id = ? AND status IN ('PENDING', 'PROCESSING')
+      `).run(now, adminId, withdrawalId);
+
+      if (updateRes.changes === 0) {
+        throw new Error(`Withdrawal request is no longer in PENDING status or was already processed`);
+      }
+
+      // Deduct from reserved balance atomically
+      const cleanAmount = Math.round(withdrawal.amount * 100) / 100;
+      const deductRes = this.db.prepare(`
+        UPDATE wallets
+        SET reserved_balance = reserved_balance - ?, updated_at = ?
+        WHERE user_id = ? AND reserved_balance >= ?
+      `).run(cleanAmount, now, withdrawal.user_id, cleanAmount);
+
+      if (deductRes.changes === 0) {
         throw new Error('Integrity error: reserved balance mismatch');
       }
 
-      const now = new Date().toISOString();
-      // Deduct from reserved balance
-      const newReserved = wallet.reserved_balance - withdrawal.amount;
-      this.db.prepare(`
-        UPDATE wallets SET reserved_balance = ?, updated_at = ? WHERE user_id = ?
-      `).run(newReserved, now, withdrawal.user_id);
-
-      // Mark completed
-      this.db.prepare(`
-        UPDATE withdrawal_requests
-        SET status = 'COMPLETED', processed_at = ?, processed_by = ?
-        WHERE id = ?
-      `).run(now, adminId, withdrawalId);
-
-      // Record withdrawal ledger entry
+      const wallet = this.getWallet(withdrawal.user_id)!;
       const entryId = `tx_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
       this.db.prepare(`
         INSERT INTO ledger_transactions (
@@ -721,7 +859,7 @@ export class DatabaseService {
         wallet.balance + withdrawal.amount,
         wallet.balance,
         `wth_comp_${withdrawalId}`,
-        `Withdrawal to ${withdrawal.address} approved by ${adminId}`,
+        `Withdrawal via Telebirr to ${withdrawal.address} approved by ${adminId}`,
         now
       );
 
@@ -742,14 +880,14 @@ export class DatabaseService {
         balance_before: wallet.balance + withdrawal.amount,
         balance_after: wallet.balance,
         reference_id: `wth_comp_${withdrawalId}`,
-        description: `Withdrawal to ${withdrawal.address} approved by ${adminId}`,
+        description: `Withdrawal via Telebirr to ${withdrawal.address} approved by ${adminId}`,
         created_at: now
       };
 
       return {
         withdrawal: this.getWithdrawalRequest(withdrawalId)!,
         entry,
-        wallet: this.getWallet(withdrawal.user_id)!
+        wallet
       };
     });
   }
@@ -762,25 +900,30 @@ export class DatabaseService {
         throw new Error(`Withdrawal is already ${withdrawal.status}`);
       }
 
-      const wallet = this.getWallet(withdrawal.user_id);
-      if (!wallet || wallet.reserved_balance < withdrawal.amount) {
-        throw new Error('Integrity error: reserved balance mismatch');
-      }
-
       const now = new Date().toISOString();
-      // Restore funds to active balance
-      const newBalance = wallet.balance + withdrawal.amount;
-      const newReserved = wallet.reserved_balance - withdrawal.amount;
 
-      this.db.prepare(`
-        UPDATE wallets SET balance = ?, reserved_balance = ?, updated_at = ? WHERE user_id = ?
-      `).run(newBalance, newReserved, now, withdrawal.user_id);
-
-      this.db.prepare(`
+      // Atomic update of withdrawal request
+      const updateRes = this.db.prepare(`
         UPDATE withdrawal_requests
         SET status = 'REJECTED', processed_at = ?, processed_by = ?, rejection_reason = ?
-        WHERE id = ?
+        WHERE id = ? AND status IN ('PENDING', 'PROCESSING')
       `).run(now, adminId, reason || 'Rejected by administrator', withdrawalId);
+
+      if (updateRes.changes === 0) {
+        throw new Error(`Withdrawal request is no longer in PENDING status or was already processed`);
+      }
+
+      // Restore funds: transfer from reserved_balance back to balance atomically
+      const cleanAmount = Math.round(withdrawal.amount * 100) / 100;
+      const restoreRes = this.db.prepare(`
+        UPDATE wallets
+        SET balance = balance + ?, reserved_balance = reserved_balance - ?, updated_at = ?
+        WHERE user_id = ? AND reserved_balance >= ?
+      `).run(cleanAmount, cleanAmount, now, withdrawal.user_id, cleanAmount);
+
+      if (restoreRes.changes === 0) {
+        throw new Error('Integrity error: reserved balance mismatch');
+      }
 
       this.recordAuditLog({
         adminUserId: adminId,
@@ -1035,6 +1178,20 @@ export class DatabaseService {
     const now = new Date().toISOString();
     const metaJson = log.metadata ? JSON.stringify(log.metadata) : null;
 
+    // Ensure system user exists if audit log is created by automated system
+    if (log.adminUserId === 'system') {
+      const sysUser = this.getUserById('system');
+      if (!sysUser) {
+        this.createUser({
+          id: 'system',
+          telegram_id: '000000000',
+          username: 'System',
+          referral_code: 'SYS00000',
+          role: 'ADMIN'
+        });
+      }
+    }
+
     const stmt = this.db.prepare(`
       INSERT INTO audit_logs (
         id, admin_user_id, action, target_user_id, target_record_id, metadata_json, timestamp
@@ -1148,11 +1305,310 @@ export class DatabaseService {
     this.db.prepare('DELETE FROM pending_registrations WHERE id = ?').run(id);
   }
 
+  // ====================================================================
+  // DAILY GRAND JACKPOT METHODS
+  // ====================================================================
+
+  public getOrCreateDailyJackpotRound(dateStr: string, cutoffIso: string): DailyJackpotRoundRow {
+    const existing = this.getDailyJackpotRoundByDate(dateStr);
+    if (existing) return existing;
+
+    const roundId = `daily-jackpot-${dateStr}`;
+    const now = new Date().toISOString();
+
+    try {
+      this.db.prepare(`
+        INSERT INTO daily_jackpot_rounds (
+          id, date_str, status, cards_sold, gross_sales, jackpot_amount,
+          platform_retained_amount, cutoff_at, created_at, updated_at
+        ) VALUES (?, ?, 'REGISTRATION_OPEN', 0, 0.0, 0.0, 0.0, ?, ?, ?)
+      `).run(roundId, dateStr, cutoffIso, now, now);
+    } catch (err: any) {
+      // If another concurrent call inserted it, return existing
+      const recheck = this.getDailyJackpotRoundByDate(dateStr);
+      if (recheck) return recheck;
+      throw err;
+    }
+
+    return this.getDailyJackpotRound(roundId)!;
+  }
+
+  public getDailyJackpotRound(roundId: string): DailyJackpotRoundRow | null {
+    const row = this.db.prepare('SELECT * FROM daily_jackpot_rounds WHERE id = ?').get(roundId);
+    return (row as DailyJackpotRoundRow) || null;
+  }
+
+  public getDailyJackpotRoundByDate(dateStr: string): DailyJackpotRoundRow | null {
+    const row = this.db.prepare('SELECT * FROM daily_jackpot_rounds WHERE date_str = ?').get(dateStr);
+    return (row as DailyJackpotRoundRow) || null;
+  }
+
+  public updateDailyJackpotRound(roundId: string, updates: Partial<DailyJackpotRoundRow>): DailyJackpotRoundRow {
+    const allowed = [
+      'status', 'cards_sold', 'gross_sales', 'jackpot_amount', 'platform_retained_amount',
+      'cutoff_at', 'checked_at', 'postponement_reason', 'winner_user_id', 'winner_ticket_id',
+      'winner_card_number', 'winner_username', 'payout_status', 'paid_at'
+    ];
+
+    const fields: string[] = [];
+    const values: any[] = [];
+
+    for (const key of allowed) {
+      if ((updates as any)[key] !== undefined) {
+        fields.push(`${key} = ?`);
+        values.push((updates as any)[key]);
+      }
+    }
+
+    fields.push('updated_at = ?');
+    values.push(new Date().toISOString());
+
+    values.push(roundId);
+    this.db.prepare(`UPDATE daily_jackpot_rounds SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+    return this.getDailyJackpotRound(roundId)!;
+  }
+
+  public getDailyJackpotTickets(roundId: string): DailyJackpotTicketRow[] {
+    const rows = this.db.prepare('SELECT * FROM daily_jackpot_tickets WHERE round_id = ? ORDER BY card_number ASC').all(roundId);
+    return (rows as DailyJackpotTicketRow[]) || [];
+  }
+
+  public getUserDailyJackpotTickets(roundId: string, userId: string): DailyJackpotTicketRow[] {
+    const rows = this.db.prepare('SELECT * FROM daily_jackpot_tickets WHERE round_id = ? AND user_id = ? ORDER BY card_number ASC').all(roundId, userId);
+    return (rows as DailyJackpotTicketRow[]) || [];
+  }
+
+  public getAllDailyJackpotRounds(limit: number = 30): DailyJackpotRoundRow[] {
+    const rows = this.db.prepare('SELECT * FROM daily_jackpot_rounds ORDER BY created_at DESC LIMIT ?').all(limit);
+    return (rows as DailyJackpotRoundRow[]) || [];
+  }
+
+  /**
+   * Authoritative, atomic card purchase for the Daily Grand Jackpot
+   */
+  public purchaseDailyJackpotTickets(params: {
+    roundId: string;
+    userId: string;
+    username: string;
+    cardNumbers: number[];
+    cardGrids?: Map<number, any>;
+    fingerprintSecret: string;
+  }): { success: boolean; tickets: DailyJackpotTicketRow[]; newBalance: number } {
+    const { roundId, userId, username, cardNumbers, cardGrids, fingerprintSecret } = params;
+
+    if (!Array.isArray(cardNumbers) || cardNumbers.length === 0) {
+      throw new Error('At least 1 card number must be selected.');
+    }
+
+    // Validate numbers 1..200
+    for (const n of cardNumbers) {
+      if (!Number.isInteger(n) || n < 1 || n > 200) {
+        throw new Error(`Invalid card number: ${n}. Cards must be between 1 and 200.`);
+      }
+    }
+
+    // Check duplicates in request
+    const uniqueNums = new Set(cardNumbers);
+    if (uniqueNums.size !== cardNumbers.length) {
+      throw new Error('Duplicate card numbers in purchase request.');
+    }
+
+    const CARD_PRICE = 999.0;
+    const totalCost = Number((cardNumbers.length * CARD_PRICE).toFixed(2));
+
+    return this.transaction(() => {
+      // 1. Check round state
+      const round = this.getDailyJackpotRound(roundId);
+      if (!round) {
+        throw new Error(`Daily Jackpot round ${roundId} not found.`);
+      }
+
+      if (round.status !== 'REGISTRATION_OPEN' && round.status !== 'POSTPONED') {
+        throw new Error(`Registration is not open for round ${roundId} (status: ${round.status}).`);
+      }
+
+      // Check capacity
+      if (round.cards_sold + cardNumbers.length > 200) {
+        throw new Error(`Cannot purchase ${cardNumbers.length} card(s). Only ${200 - round.cards_sold} card(s) remaining for this round.`);
+      }
+
+      // 2. Check if any card is already sold
+      const placeholders = cardNumbers.map(() => '?').join(',');
+      const takenRows = this.db.prepare(`
+        SELECT card_number FROM daily_jackpot_tickets WHERE round_id = ? AND card_number IN (${placeholders})
+      `).all(roundId, ...cardNumbers) as Array<{ card_number: number }>;
+
+      if (takenRows && takenRows.length > 0) {
+        const takenList = takenRows.map(r => `#${r.card_number}`).join(', ');
+        throw new Error(`Card(s) already taken: ${takenList}`);
+      }
+
+      // 3. Atomically debit wallet balance and record ledger entry
+      const now = new Date().toISOString();
+      const cardListStr = cardNumbers.map(n => `#${n}`).join(', ');
+      const { wallet: updatedWallet } = this.recordLedgerTransaction({
+        userId,
+        username,
+        type: 'BET',
+        amount: totalCost,
+        gameId: roundId,
+        description: `Daily Grand Jackpot: Card(s) ${cardListStr} (${cardNumbers.length} @ 999 ETB)`
+      });
+
+      // 4. Insert each ticket
+      const createdTickets: DailyJackpotTicketRow[] = [];
+      const insertTicketStmt = this.db.prepare(`
+        INSERT INTO daily_jackpot_tickets (
+          id, round_id, card_number, user_id, username, price, grid_json, fingerprint_hash, purchased_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      for (const cardNum of cardNumbers) {
+        const ticketId = `djtkt_${roundId}_c${cardNum}_${Date.now().toString().slice(-4)}`;
+        const grid = (cardGrids && cardGrids.get(cardNum)) || {
+          B: [1, 5, 8, 12, 15],
+          I: [16, 20, 24, 28, 30],
+          N: [31, 35, 0, 40, 45],
+          G: [46, 50, 53, 57, 60],
+          O: [61, 65, 68, 72, 75]
+        };
+        const gridJson = JSON.stringify(grid);
+        const fingerprintHash = crypto.createHash('sha256')
+          .update(`${gridJson}:${userId}:${roundId}:${fingerprintSecret}`)
+          .digest('hex');
+
+        insertTicketStmt.run(
+          ticketId,
+          roundId,
+          cardNum,
+          userId,
+          username,
+          CARD_PRICE,
+          gridJson,
+          fingerprintHash,
+          now
+        );
+
+        createdTickets.push({
+          id: ticketId,
+          round_id: roundId,
+          card_number: cardNum,
+          user_id: userId,
+          username,
+          price: CARD_PRICE,
+          grid_json: gridJson,
+          fingerprint_hash: fingerprintHash,
+          purchased_at: now
+        });
+      }
+
+      // 5. Increment cards_sold & gross_sales on round
+      this.db.prepare(`
+        UPDATE daily_jackpot_rounds
+        SET cards_sold = cards_sold + ?,
+            gross_sales = gross_sales + ?,
+            updated_at = ?
+        WHERE id = ?
+      `).run(cardNumbers.length, totalCost, now, roundId);
+
+      return {
+        success: true,
+        tickets: createdTickets,
+        newBalance: updatedWallet.balance
+      };
+    });
+  }
+
+  /**
+   * Record Daily Grand Jackpot winner & payout atomically
+   */
+  public recordDailyJackpotWinner(params: {
+    roundId: string;
+    winnerUserId: string;
+    winnerUsername: string;
+    winnerTicketId: string;
+    winnerCardNumber: number;
+    jackpotAmount: number;
+    platformRetained: number;
+  }): void {
+    const {
+      roundId,
+      winnerUserId,
+      winnerUsername,
+      winnerTicketId,
+      winnerCardNumber,
+      jackpotAmount,
+      platformRetained
+    } = params;
+
+    this.transaction(() => {
+      const now = new Date().toISOString();
+
+      // Guard: Ensure round is not already completed
+      const updateResult = this.db.prepare(`
+        UPDATE daily_jackpot_rounds
+        SET status = 'COMPLETED',
+            jackpot_amount = ?,
+            platform_retained_amount = ?,
+            winner_user_id = ?,
+            winner_username = ?,
+            winner_ticket_id = ?,
+            winner_card_number = ?,
+            payout_status = 'PAID',
+            paid_at = ?,
+            updated_at = ?
+        WHERE id = ? AND status != 'COMPLETED'
+      `).run(
+        jackpotAmount,
+        platformRetained,
+        winnerUserId,
+        winnerUsername,
+        winnerTicketId,
+        winnerCardNumber,
+        now,
+        now,
+        roundId
+      );
+
+      if (updateResult.changes !== 1) {
+        throw new Error(`Round ${roundId} is already completed or not found.`);
+      }
+
+      // Credit winner wallet and record double-entry ledger entry atomically
+      this.recordLedgerTransaction({
+        userId: winnerUserId,
+        username: winnerUsername,
+        type: 'WIN_PAYOUT',
+        amount: jackpotAmount,
+        gameId: roundId,
+        ticketId: winnerTicketId,
+        referenceId: `jackpot_payout_${roundId}_${winnerTicketId}`,
+        description: `Daily Grand Jackpot Champion Payout on Card #${winnerCardNumber} (${jackpotAmount.toLocaleString()} ETB)`
+      });
+
+      // Record audit log
+      this.recordAuditLog({
+        adminUserId: 'system',
+        action: 'DAILY_JACKPOT_PAYOUT',
+        targetUserId: winnerUserId,
+        targetRecordId: roundId,
+        metadata: {
+          jackpotAmount,
+          platformRetained,
+          card: winnerCardNumber,
+          ticketId: winnerTicketId
+        }
+      });
+    });
+  }
+
   /**
    * Reset database (primarily for clean test suite runs)
    */
   public resetDatabase(): void {
     this.db.exec(`
+      DELETE FROM daily_jackpot_tickets;
+      DELETE FROM daily_jackpot_rounds;
       DELETE FROM pending_registrations;
       DELETE FROM audit_logs;
       DELETE FROM bingo_claims;

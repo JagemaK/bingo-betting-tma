@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Trophy, Crown, Sparkles, X, Flame, Medal, ArrowLeft, ArrowRight } from 'lucide-react';
 import { LeaderboardWinner, RecentJackpot, CurrencyType } from '../types/bingo.js';
 import { soundService } from '../services/soundService.js';
+import { apiUrl } from '../config/api.js';
 
 interface LeaderboardModalProps {
   isOpen: boolean;
@@ -19,7 +20,7 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
 
   useEffect(() => {
     if (isOpen) {
-      fetch('/api/leaderboard')
+      fetch(apiUrl('/api/leaderboard'))
         .then((res) => res.json())
         .then((data) => {
           setWinners(data.topWinners || []);
@@ -32,7 +33,7 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
   if (!isOpen) return null;
 
   const formatAmount = (_usd: number, etb: number) => {
-    return `${etb.toLocaleString()} Birr`;
+    return `${((etb ?? 0)).toLocaleString()} Birr`;
   };
 
   const top1 = winners.find((w) => w.rank === 1);

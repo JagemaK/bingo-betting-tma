@@ -11,13 +11,12 @@ import {
   ArrowLeft,
   ShieldCheck,
   Phone,
-  Clock,
-  Building2,
-  CreditCard
+  Clock
 } from 'lucide-react';
 import { UserAccount, LedgerEntry } from '../types/bingo.js';
 import { soundService } from '../services/soundService.js';
 import { telegramSdk } from '../services/telegramSdk.js';
+import { apiUrl } from '../config/api.js';
 
 interface WalletModalProps {
   isOpen: boolean;
@@ -37,14 +36,15 @@ export const WalletModal: React.FC<WalletModalProps> = ({
   onUpdateUser,
 }) => {
   const [activeTab, setActiveTab] = useState<'deposit' | 'withdraw' | 'history'>(initialTab);
-  const [paymentProvider, setPaymentProvider] = useState<'TELEBIRR' | 'CBE' | 'CHAPA'>('TELEBIRR');
   const [depositAmount, setDepositAmount] = useState<number | ''>(100);
+  const [telebirrReference, setTelebirrReference] = useState<string>('');
   const [withdrawAmount, setWithdrawAmount] = useState<number | ''>('');
   const [withdrawAddress, setWithdrawAddress] = useState<string>(user?.phone || '');
   const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>([]);
   const [ledgerFilter, setLedgerFilter] = useState<'all' | 'deposit' | 'win_payout' | 'withdrawal'>('all');
   const [loading, setLoading] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -52,14 +52,14 @@ export const WalletModal: React.FC<WalletModalProps> = ({
       if (user?.playerId) fetchLedger();
       if (user?.phone) setWithdrawAddress(user.phone);
     }
-  }, [isOpen, initialTab, user?.playerId, user?.phone]);
+  }, [isOpen, initialTab, user?.playerId, user?.phone, user?.walletBalance]);
 
   if (!isOpen) return null;
 
   const fetchLedger = async () => {
     if (!user?.playerId) return;
     try {
-      const res = await fetch(`/api/ledger/${user.playerId}`);
+      const res = await fetch(apiUrl(`/api/ledger/${user.playerId}`));
       if (res.ok) {
         const data = await res.json();
         setLedgerEntries(data.entries || []);
@@ -73,30 +73,46 @@ export const WalletModal: React.FC<WalletModalProps> = ({
     const numAmount = typeof depositAmount === 'number' ? depositAmount : 0;
     if (!user?.playerId || numAmount < 10) {
       soundService.playError();
+      setErrorMsg('Minimum deposit amount is 10 Birr');
       return;
     }
     setLoading(true);
     setSuccessMsg(null);
+    setErrorMsg(null);
     try {
-      const res = await fetch('/api/wallet/deposit', {
+      const token = localStorage.getItem('bingo_auth_token');
+      const authHeaders: Record<string, string> = {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      };
+      const res = await fetch(apiUrl('/api/wallet/deposit'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders,
         body: JSON.stringify({
           playerId: user.playerId,
           amount: numAmount,
-          paymentMethod: paymentProvider
+          paymentMethod: 'Telebirr',
+          referenceId: telebirrReference.trim() || undefined,
+          telebirrReference: telebirrReference.trim() || undefined
         })
       });
       const data = await res.json();
-      if (data.success && data.user) {
-        onUpdateUser(data.user);
+      if (res.ok && data.success) {
+        if (data.user) {
+          onUpdateUser(data.user);
+        }
         soundService.playLineChime();
         telegramSdk.triggerHaptic('success');
-        setSuccessMsg(`Successfully deposited ${numAmount.toLocaleString()} Birr via ${paymentProvider}! Instant balance updated.`);
+        setSuccessMsg(`Deposit request of ${numAmount.toLocaleString()} Birr submitted via Telebirr! Pending admin verification.`);
+        setTelebirrReference('');
         fetchLedger();
+      } else {
+        soundService.playError();
+        setErrorMsg(data.error || 'Failed to submit deposit request');
       }
-    } catch (e) {
+    } catch (e: any) {
       soundService.playError();
+      setErrorMsg(e.message || 'Network error submitting deposit');
       console.error(e);
     } finally {
       setLoading(false);
@@ -105,33 +121,52 @@ export const WalletModal: React.FC<WalletModalProps> = ({
 
   const handleWithdraw = async () => {
     const numAmount = typeof withdrawAmount === 'number' ? withdrawAmount : 0;
-    if (!user?.playerId || numAmount <= 0 || numAmount > (user.walletBalance || 0)) {
+    if (!user?.playerId || numAmount < 10 || numAmount > (user.walletBalance || 0)) {
       soundService.playError();
+      setErrorMsg(numAmount < 10 ? 'Minimum withdrawal is 10 Birr' : 'Insufficient available balance');
+      return;
+    }
+    if (!withdrawAddress.trim()) {
+      soundService.playError();
+      setErrorMsg('Please enter your Telebirr phone number (09... or 07...)');
       return;
     }
     setLoading(true);
     setSuccessMsg(null);
+    setErrorMsg(null);
     try {
-      const res = await fetch('/api/wallet/withdraw', {
+      const token = localStorage.getItem('bingo_auth_token');
+      const authHeaders: Record<string, string> = {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      };
+      const res = await fetch(apiUrl('/api/wallet/withdraw'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders,
         body: JSON.stringify({
           playerId: user.playerId,
           amount: numAmount,
-          withdrawAddress: withdrawAddress || `${paymentProvider} Account`
+          address: withdrawAddress.trim(),
+          withdrawAddress: withdrawAddress.trim()
         })
       });
       const data = await res.json();
-      if (data.success && data.user) {
-        onUpdateUser(data.user);
+      if (res.ok && data.success) {
+        if (data.user) {
+          onUpdateUser(data.user);
+        }
         soundService.playLineChime();
         telegramSdk.triggerHaptic('success');
-        setSuccessMsg(`Withdrawal of ${numAmount.toLocaleString()} Birr requested via ${paymentProvider}!`);
+        setSuccessMsg(`Withdrawal request of ${numAmount.toLocaleString()} Birr submitted for Telebirr payout! Balance reserved pending review.`);
         setWithdrawAmount('');
         fetchLedger();
+      } else {
+        soundService.playError();
+        setErrorMsg(data.error || 'Failed to submit withdrawal request');
       }
-    } catch (e) {
+    } catch (e: any) {
       soundService.playError();
+      setErrorMsg(e.message || 'Network error submitting withdrawal');
       console.error(e);
     } finally {
       setLoading(false);
@@ -172,7 +207,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                 BINGO CASHIER
               </span>
               <span className="text-[9px] font-arcade font-black px-2 py-0.5 rounded-full bg-[#E8FF00] text-black uppercase">
-                INSTANT PAYOUT
+                TELEBIRR ONLY
               </span>
             </div>
           </div>
@@ -191,7 +226,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
 
         {/* Main Content */}
         <main className="relative z-10 flex-1 overflow-y-auto custom-scrollbar p-5 space-y-4 w-full">
-        {/* 1. HUGE CURRENT BALANCE DISPLAY */}
+        {/* 1. CURRENT BALANCE DISPLAY */}
         <div className="p-4 rounded-2xl bg-[#111111] border border-white/10 text-center space-y-1 relative overflow-hidden shadow-sm">
           <div className="flex items-center justify-between">
             <span className="text-[10px] font-arcade font-bold text-white/50 uppercase tracking-widest">
@@ -226,6 +261,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
               soundService.playClick();
               setActiveTab('deposit');
               setSuccessMsg(null);
+              setErrorMsg(null);
             }}
             className={`py-2 text-xs rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer font-arcade font-black uppercase ${
               activeTab === 'deposit'
@@ -242,6 +278,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
               soundService.playClick();
               setActiveTab('withdraw');
               setSuccessMsg(null);
+              setErrorMsg(null);
             }}
             className={`py-2 text-xs rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer font-arcade font-black uppercase ${
               activeTab === 'withdraw'
@@ -258,6 +295,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
               soundService.playClick();
               setActiveTab('history');
               setSuccessMsg(null);
+              setErrorMsg(null);
             }}
             className={`py-2 text-xs rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer font-arcade font-black uppercase ${
               activeTab === 'history'
@@ -274,47 +312,54 @@ export const WalletModal: React.FC<WalletModalProps> = ({
         {successMsg && (
           <div className="p-3 rounded-xl bg-emerald-500/20 border border-emerald-400 text-emerald-300 font-arcade text-xs flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
               <span>{successMsg}</span>
             </div>
             <button onClick={() => setSuccessMsg(null)} className="font-bold px-1 text-emerald-400">✕</button>
           </div>
         )}
 
+        {/* Error Alert */}
+        {errorMsg && (
+          <div className="p-3 rounded-xl bg-rose-500/20 border border-rose-400 text-rose-300 font-arcade text-xs flex items-center justify-between">
+            <span>{errorMsg}</span>
+            <button onClick={() => setErrorMsg(null)} className="font-bold px-1 text-rose-400">✕</button>
+          </div>
+        )}
+
         {/* ══════════════════════════════════════════════════ */}
-        {/* TAB 1: DEPOSIT                                     */}
+        {/* TAB 1: DEPOSIT (TELEBIRR ONLY)                     */}
         {/* ══════════════════════════════════════════════════ */}
         {activeTab === 'deposit' && (
           <div className="space-y-3.5">
-            {/* Payment Method Selector (Telebirr / CBE / Chapa) */}
-            <div className="space-y-1.5">
-              <span className="text-[10px] font-arcade font-black text-white/60 uppercase">
-                CHOOSE PAYMENT METHOD
-              </span>
-              <div className="grid grid-cols-3 gap-2">
-                {[
-                  { id: 'TELEBIRR' as const, name: 'Telebirr', icon: Phone, badge: 'INSTANT' },
-                  { id: 'CBE' as const, name: 'CBE Birr', icon: Building2, badge: 'DIRECT' },
-                  { id: 'CHAPA' as const, name: 'Chapa', icon: CreditCard, badge: 'CARDS' },
-                ].map((item) => (
-                  <button
-                    key={item.id}
-                    onClick={() => {
-                      soundService.playClick();
-                      setPaymentProvider(item.id);
-                    }}
-                    className={`p-2.5 rounded-xl border flex flex-col items-center justify-center transition-all cursor-pointer ${
-                      paymentProvider === item.id
-                        ? 'bg-[#181818] border-2 border-[#E8FF00] shadow-[0_0_12px_rgba(232,255,0,0.25)]'
-                        : 'bg-[#111111] border-white/10 hover:border-white/20'
-                    }`}
-                  >
-                    <item.icon className={`w-4 h-4 ${paymentProvider === item.id ? 'text-[#E8FF00]' : 'text-white/60'}`} />
-                    <span className="font-arcade font-black text-xs text-white mt-1">{item.name}</span>
-                    <span className="text-[7px] font-arcade text-white/40">{item.badge}</span>
-                  </button>
-                ))}
+            {/* Dedicated Telebirr Badge Banner */}
+            <div className="p-3.5 rounded-2xl bg-gradient-to-r from-emerald-950/60 to-slate-900 border-2 border-emerald-500/40 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-500 text-black font-arcade font-black text-sm flex items-center justify-center shadow-lg">
+                  TB
+                </div>
+                <div>
+                  <div className="font-arcade font-black text-xs text-white uppercase tracking-wide">
+                    PAY WITH TELEBIRR
+                  </div>
+                  <div className="text-[10px] text-emerald-400 font-mono font-medium">
+                    Exclusive Mobile Money Gateway
+                  </div>
+                </div>
               </div>
+              <span className="text-[9px] font-arcade font-black px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 uppercase">
+                100% VERIFIED
+              </span>
+            </div>
+
+            {/* Step-by-Step Instructions */}
+            <div className="p-3 rounded-xl bg-[#161616] border border-white/10 space-y-1 text-[11px] text-white/70">
+              <div className="text-[10px] font-arcade font-black text-[#E8FF00] uppercase">
+                TELEBIRR PAYMENT INSTRUCTIONS:
+              </div>
+              <div>1. Transfer <strong className="text-white">{numDeposit} ETB</strong> via Telebirr (*127# or SuperApp).</div>
+              <div>2. Enter the <strong className="text-[#E8FF00]">Telebirr Transaction Reference ID</strong> below.</div>
+              <div>3. Tap Submit. Funds are credited immediately once verified.</div>
             </div>
 
             {/* Fast Preset Deposit Buttons */}
@@ -342,10 +387,10 @@ export const WalletModal: React.FC<WalletModalProps> = ({
               </div>
             </div>
 
-            {/* Custom Input */}
+            {/* Custom Amount Input */}
             <div className="space-y-1.5">
               <span className="text-[10px] font-arcade font-black text-white/60 uppercase">
-                OR ENTER CUSTOM AMOUNT (BIRR)
+                DEPOSIT AMOUNT (ETB BIRR)
               </span>
               <div className="relative rounded-2xl bg-[#141414] border-2 border-[#E8FF00]/40 focus-within:border-[#E8FF00] p-3">
                 <div className="flex items-center gap-3">
@@ -367,39 +412,81 @@ export const WalletModal: React.FC<WalletModalProps> = ({
               </div>
             </div>
 
+            {/* Telebirr Reference ID Input */}
+            <div className="space-y-1.5">
+              <span className="text-[10px] font-arcade font-black text-white/60 uppercase">
+                TELEBIRR TRANSACTION REFERENCE / RECEIPT ID
+              </span>
+              <div className="relative rounded-2xl bg-[#141414] border-2 border-white/20 focus-within:border-[#E8FF00] p-3 flex items-center gap-2">
+                <ShieldCheck className="w-5 h-5 text-[#E8FF00] shrink-0" />
+                <input
+                  type="text"
+                  value={telebirrReference}
+                  onChange={(e) => {
+                    setTelebirrReference(e.target.value);
+                    setErrorMsg(null);
+                  }}
+                  placeholder="e.g. CR1234567890 or TXN8877"
+                  className="w-full bg-transparent font-arcade text-sm text-white outline-none uppercase tracking-wider"
+                />
+              </div>
+              <span className="text-[9px] text-white/40 block">
+                Found in your Telebirr SMS confirmation (Required for fast approval)
+              </span>
+            </div>
+
             {/* Deposit CTA */}
             <button
               onClick={handleDeposit}
               disabled={loading || numDeposit < 10}
               className="btn-neon w-full py-3.5 rounded-2xl text-xs font-arcade font-black uppercase tracking-wide cursor-pointer disabled:opacity-40"
             >
-              {loading ? 'PROCESSING...' : `DEPOSIT ${numDeposit} BIRR VIA ${paymentProvider}`}
+              {loading ? 'PROCESSING...' : `PAY WITH TELEBIRR (${numDeposit} BIRR)`}
             </button>
 
             {/* High Trust Badges */}
             <div className="flex items-center justify-center gap-2 text-center text-[10px] font-arcade text-white/40 pt-1">
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Instant Confirmation • 0% Deposit Fee • Official Verified Merchant</span>
+              <span>Official Telebirr Payout • 0% Fee • Single Authoritative Gateway</span>
             </div>
           </div>
         )}
 
         {/* ══════════════════════════════════════════════════ */}
-        {/* TAB 2: WITHDRAW                                    */}
+        {/* TAB 2: WITHDRAW (TELEBIRR ONLY)                    */}
         {/* ══════════════════════════════════════════════════ */}
         {activeTab === 'withdraw' && (
           <div className="space-y-3.5">
+            <div className="p-3.5 rounded-2xl bg-gradient-to-r from-emerald-950/60 to-slate-900 border-2 border-emerald-500/40 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-500 text-black font-arcade font-black text-sm flex items-center justify-center shadow-lg">
+                  TB
+                </div>
+                <div>
+                  <div className="font-arcade font-black text-xs text-white uppercase tracking-wide">
+                    TELEBIRR WITHDRAWAL
+                  </div>
+                  <div className="text-[10px] text-emerald-400 font-mono font-medium">
+                    Direct Payout to Telebirr Wallet
+                  </div>
+                </div>
+              </div>
+              <span className="text-[9px] font-arcade font-black px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 uppercase">
+                AUTO-RESERVED
+              </span>
+            </div>
+
             <div className="space-y-1.5">
               <label className="text-[10px] font-arcade font-black text-white/60 uppercase">
-                TELEBIRR / CBE ACCOUNT PHONE
+                TELEBIRR ACCOUNT PHONE NUMBER
               </label>
-              <div className="rounded-xl bg-[#141414] border border-white/10 p-2.5 flex items-center gap-2">
+              <div className="rounded-xl bg-[#141414] border border-white/20 focus-within:border-[#E8FF00] p-2.5 flex items-center gap-2">
                 <Phone className="w-4 h-4 text-[#E8FF00]" />
                 <input
                   type="tel"
                   value={withdrawAddress}
                   onChange={(e) => setWithdrawAddress(e.target.value)}
-                  placeholder="09xxxxxxxx"
+                  placeholder="09xxxxxxxx or 07xxxxxxxx"
                   className="bg-transparent font-arcade text-xs text-white outline-none w-full"
                 />
               </div>
@@ -441,7 +528,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
               disabled={loading || !withdrawAmount || withdrawAmount <= 0 || withdrawAmount > currentBalance}
               className="btn-neon w-full py-3.5 rounded-2xl text-xs font-arcade font-black uppercase tracking-wide cursor-pointer disabled:opacity-40"
             >
-              {loading ? 'PROCESSING...' : `WITHDRAW ${withdrawAmount || 0} BIRR`}
+              {loading ? 'PROCESSING...' : `WITHDRAW ${withdrawAmount || 0} BIRR VIA TELEBIRR`}
             </button>
           </div>
         )}
@@ -479,7 +566,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                       : 'text-rose-400'
                   }`}>
                     {entry.type === 'buy_in' ? '-' : '+'}
-                    {entry.amount.toLocaleString()} BIRR
+                    {((entry.amount ?? 0)).toLocaleString()} BIRR
                   </div>
                 </div>
               ))

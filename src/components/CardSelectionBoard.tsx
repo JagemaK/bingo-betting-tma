@@ -21,6 +21,7 @@ import {
 import { GameRoomState, CurrencyType, UserAccount, BingoGrid } from '../types/bingo.js';
 import { soundService } from '../services/soundService.js';
 import { telegramSdk } from '../services/telegramSdk.js';
+import { apiUrl } from '../config/api.js';
 import { TopHeader } from './TopHeader.js';
 import { BottomNavDock } from './BottomNavDock.js';
 
@@ -139,7 +140,7 @@ export const CardSelectionBoard: React.FC<CardSelectionBoardProps> = ({
   // Pre-fetch catalog
   useEffect(() => {
     let isMounted = true;
-    fetch(`/api/room/${roomState.roomId}/catalog`)
+    fetch(apiUrl(`/api/room/${roomState.roomId}/catalog`))
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (isMounted && data && data.catalog) {
@@ -152,11 +153,11 @@ export const CardSelectionBoard: React.FC<CardSelectionBoardProps> = ({
     };
   }, [roomState.roomId, roomState.gameId]);
 
-  const formatCurrency = (val: number) => `${val.toLocaleString()} Birr`;
+  const formatCurrency = (val: number) => `${((val ?? 0)).toLocaleString()} Birr`;
 
   const formatUserBalance = () => {
     if (!user) return '0 Birr';
-    return `${user.walletBalance.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })} Birr`;
+    return `${((user.walletBalance ?? 0)).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })} Birr`;
   };
 
   const formattedTimer = `0:${localSeconds.toString().padStart(2, '0')}`;

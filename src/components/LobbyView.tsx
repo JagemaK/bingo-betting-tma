@@ -8,8 +8,9 @@ import {
   Users,
   Play,
   RotateCw,
+  Trophy,
 } from 'lucide-react';
-import { RoomSummary, CurrencyType, UserAccount } from '../types/bingo.js';
+import { RoomSummary, CurrencyType, UserAccount, DailyJackpotPublicState } from '../types/bingo.js';
 import { soundService } from '../services/soundService.js';
 import { telegramSdk } from '../services/telegramSdk.js';
 import { TopHeader } from './TopHeader.js';
@@ -22,6 +23,8 @@ interface LobbyViewProps {
   currency?: CurrencyType;
   onSelectCurrency?: (c: CurrencyType) => void;
   onJoinRoom: (roomId: string) => void;
+  onOpenDailyJackpot?: () => void;
+  dailyJackpotState?: DailyJackpotPublicState | null;
   onOpenWallet: () => void;
   onOpenLeaderboard: () => void;
   onOpenReferral: () => void;
@@ -42,6 +45,8 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
   rooms,
   user,
   onJoinRoom,
+  onOpenDailyJackpot,
+  dailyJackpotState,
   onOpenWallet,
   onOpenLeaderboard,
   onOpenReferral,
@@ -55,7 +60,7 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
   onRefresh,
 }) => {
   const [activeFilter, setActiveFilter] = useState<FilterTab>('all');
-  const formatCurrency = (val: number) => `${val.toLocaleString()} Birr`;
+  const formatCurrency = (val: number) => `${((val ?? 0)).toLocaleString()} Birr`;
 
   // Find featured or highest pool room for hero
   const highestRoom = [...rooms].sort((a, b) => (b.totalPot || 0) - (a.totalPot || 0))[0] || rooms[0];
@@ -99,54 +104,68 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
       {/* Main Content Area */}
       <main className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-24 space-y-6 flex-1 relative z-10">
         {/* ══════════════════════════════════════════════════ */}
-        {/* HERO ARCADE BANNER: BIGGEST POOL / INSTANT JOIN    */}
+        {/* HERO ARCADE BANNER: DAILY GRAND JACKPOT (12:00 PM) */}
         {/* ══════════════════════════════════════════════════ */}
         <section 
-          className="relative rounded-3xl p-5 md:p-7 overflow-hidden border border-[#E8FF00]/40 bg-gradient-to-br from-[#181907] via-[#111111] to-[#0d0d0d] shadow-[0_0_30px_rgba(232,255,0,0.18)] flex flex-col md:flex-row md:items-center md:justify-between gap-6"
-          aria-label="Featured Tournament"
+          className="relative rounded-3xl p-5 md:p-7 overflow-hidden border border-amber-500/40 bg-gradient-to-br from-[#1a1303] via-[#111111] to-[#0d0d0d] shadow-[0_0_30px_rgba(245,158,11,0.2)] flex flex-col md:flex-row md:items-center md:justify-between gap-6"
+          aria-label="Daily Grand Jackpot"
         >
           {/* Neon accent corner lines */}
-          <div className="absolute top-0 right-0 w-32 h-32 bg-[#E8FF00]/[0.09] rounded-bl-full pointer-events-none" />
-          <div className="absolute top-3 right-3 flex items-center gap-1">
-            <span className="badge-neon text-[10px] py-1 px-2.5 whitespace-nowrap">
-              <Zap className="w-3.5 h-3.5 fill-current" />
-              HOT POT
+          <div className="absolute top-0 right-0 w-32 h-32 bg-amber-500/[0.08] rounded-bl-full pointer-events-none" />
+          <div className="absolute top-3 right-3 flex items-center gap-1.5">
+            {dailyJackpotState?.isPostponed ? (
+              <span className="text-[10px] font-arcade font-black py-1 px-2.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 whitespace-nowrap">
+                ⚠️ POSTPONED (NEXT: 12:00 PM)
+              </span>
+            ) : (
+              <span className="badge-neon text-[10px] py-1 px-2.5 whitespace-nowrap bg-amber-500/20 text-amber-300 border-amber-500/30">
+                <Trophy className="w-3.5 h-3.5 text-amber-300 fill-current" />
+                DAILY DRAW
+              </span>
+            )}
+            <span className="text-[10px] font-arcade font-bold py-1 px-2.5 rounded-full bg-black/60 text-white/80 border border-white/10 whitespace-nowrap">
+              {dailyJackpotState?.cardsSold || 0}/200 CARDS SOLD
             </span>
           </div>
 
           <div className="space-y-1.5 max-w-xl">
-            <div className="text-[10px] sm:text-xs font-arcade font-black text-[#E8FF00] uppercase tracking-widest flex items-center gap-1.5 whitespace-nowrap">
-              <span>⚡ LIVE MULTIPLAYER PARI-MUTUEL POOL</span>
+            <div className="text-[10px] sm:text-xs font-arcade font-black text-amber-400 uppercase tracking-widest flex items-center gap-1.5 whitespace-nowrap">
+              <Zap className="w-3.5 h-3.5 text-amber-400 fill-current" />
+              <span>⚡ OFFICIAL 12:00 PM ETHIOPIA DRAW</span>
             </div>
             <h2 className="font-arcade text-2xl sm:text-3xl lg:text-4xl font-black text-white tracking-tight uppercase leading-none">
-              WEEKEND GRAND JACKPOT
+              DAILY GRAND JACKPOT
             </h2>
             <div className="pt-1.5">
               <span className="text-xs font-arcade font-bold text-white/50 uppercase block">
                 Guaranteed Winner Pool
               </span>
-              <span className="font-arcade text-3xl sm:text-4xl lg:text-5xl font-black text-[#E8FF00] tracking-tight drop-shadow-[0_0_16px_rgba(232,255,0,0.5)] whitespace-nowrap">
-                250,000 BIRR
+              <span className="font-arcade text-3xl sm:text-4xl lg:text-5xl font-black text-amber-300 tracking-tight drop-shadow-[0_0_16px_rgba(245,158,11,0.5)] whitespace-nowrap">
+                {(dailyJackpotState?.jackpotAmount || 100000).toLocaleString()} BIRR
               </span>
             </div>
           </div>
 
           <div className="pt-3 md:pt-0 border-t md:border-t-0 md:border-l border-white/10 md:pl-6 flex flex-col sm:flex-row md:flex-col items-start sm:items-center md:items-end justify-between gap-3 flex-shrink-0">
             <div className="flex items-center gap-1.5 text-xs text-white/70 font-arcade whitespace-nowrap">
-              <Clock className="w-4 h-4 text-[#E8FF00]" />
-              <span>Next Big Draw: <strong className="text-white">Tonight 8 PM</strong></span>
+              <Clock className="w-4 h-4 text-amber-400" />
+              <span>Next Draw: <strong className="text-white">Daily 12:00 PM</strong></span>
             </div>
 
             <button
               onClick={() => {
                 soundService.playClick();
                 telegramSdk.triggerHaptic('medium');
-                if (highestRoom) onJoinRoom(highestRoom.roomId);
+                if (onOpenDailyJackpot) {
+                  onOpenDailyJackpot();
+                } else if (highestRoom) {
+                  onJoinRoom(highestRoom.roomId);
+                }
               }}
-              className="btn-neon text-sm py-3 px-6 rounded-2xl flex items-center gap-2 shadow-lg whitespace-nowrap cursor-pointer"
+              className="btn-neon text-sm py-3 px-6 rounded-2xl flex items-center gap-2 shadow-lg whitespace-nowrap cursor-pointer bg-gradient-to-r from-amber-400 to-yellow-300 text-black border-amber-300 shadow-[0_0_20px_rgba(245,158,11,0.4)]"
             >
-              <Play className="w-4 h-4 fill-current" />
-              <span>INSTANT PLAY</span>
+              <Trophy className="w-4 h-4 fill-current text-black" />
+              <span>ENTER JACKPOT →</span>
             </button>
           </div>
         </section>

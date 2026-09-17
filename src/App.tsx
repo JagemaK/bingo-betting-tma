@@ -22,12 +22,14 @@ import {
   UserAccount,
   WinnerRecord,
   RoomSummary,
-  CurrencyType
+  CurrencyType,
+  DailyJackpotPublicState
 } from './types/bingo.js';
 import { verifyWinningPatterns } from './utils/bingoRules.js';
 import { BingoCard } from './components/BingoCard.js';
 import { BallHopper } from './components/BallHopper.js';
 import { PariMutuelHeader } from './components/PariMutuelHeader.js';
+import { BACKEND_URL, apiUrl } from './config/api.js';
 import { CardSelectionBoard } from './components/CardSelectionBoard.js';
 import { ProvablyFairModal } from './components/ProvablyFairModal.js';
 import { WalletModal } from './components/WalletModal.js';
@@ -41,6 +43,7 @@ import { LobbyView } from './components/LobbyView.js';
 import { AuthModal, AuthModalMode } from './components/AuthModal.js';
 import { UserProfileDrawer } from './components/UserProfileDrawer.js';
 import { AdminDashboardModal } from './components/AdminDashboardModal.js';
+import { DailyJackpotModal } from './components/DailyJackpotModal.js';
 import { soundService } from './services/soundService.js';
 import { telegramSdk } from './services/telegramSdk.js';
 import { useAuth } from './services/authContext.js';
@@ -68,8 +71,9 @@ export default function App() {
 
   // Modals & Drawer State
   const [activeModal, setActiveModal] = useState<
-    'wallet' | 'provablyFair' | 'rules' | 'leaderboard' | 'referral' | 'contact' | 'admin' | null
+    'wallet' | 'provablyFair' | 'rules' | 'leaderboard' | 'referral' | 'contact' | 'admin' | 'daily_jackpot' | null
   >(null);
+  const [dailyJackpotState, setDailyJackpotState] = useState<DailyJackpotPublicState | null>(null);
   const [walletInitialTab, setWalletInitialTab] = useState<'deposit' | 'withdraw' | 'history'>('deposit');
   const [authModalOpen, setAuthModalOpen] = useState<boolean>(false);
   const [authModalMode, setAuthModalMode] = useState<AuthModalMode>('register');
@@ -194,10 +198,17 @@ export default function App() {
   useEffect(() => {
     telegramSdk.init();
 
-    fetch('/api/rooms')
+    fetch(apiUrl('/api/rooms'))
       .then((res) => res.json())
       .then((data) => {
         if (data.rooms) setRooms(data.rooms);
+      })
+      .catch(console.error);
+
+    fetch(apiUrl('/api/daily-jackpot/current'))
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success) setDailyJackpotState(data);
       })
       .catch(console.error);
   }, []);
@@ -213,7 +224,7 @@ export default function App() {
   // Initialize WebSocket Connection with Authenticated Session Token
   useEffect(() => {
     const token = auth.sessionToken || localStorage.getItem('bingo_auth_token');
-    const s = io(window.location.origin, {
+    const s = io(BACKEND_URL, {
       auth: { token: token || undefined },
       transports: ['websocket', 'polling'],
       reconnection: true,
@@ -225,6 +236,10 @@ export default function App() {
 
     s.on('connect', () => {
       console.log('Connected to Bingo Multi-Room Server');
+      const token = auth.sessionToken || localStorage.getItem('bingo_auth_token');
+      if (token) {
+        s.emit('AUTHENTICATE_SOCKET', { token });
+      }
       if (activeRoomIdRef.current) {
         s.emit('JOIN_ROOM', { roomId: activeRoomIdRef.current });
       }
@@ -295,6 +310,35 @@ export default function App() {
       }
     });
 
+    // Real-time server push on deposit approvals, withdrawals, and balance updates
+    s.on('WALLET_UPDATED', (data: { playerId: string; balance: number; reservedBalance?: number; type: string; amount: number; message?: string }) => {
+      const current = userRef.current;
+      if (current && (data.playerId === current.playerId || data.playerId === current.id)) {
+        setUser((prev) => prev ? { ...prev, walletBalance: data.balance } : null);
+        soundService.playJackpotFanfare();
+        telegramSdk.triggerHaptic('success');
+      }
+    });
+
+    s.on('DEPOSIT_REJECTED', (data: { playerId: string; message?: string }) => {
+      const current = userRef.current;
+      if (current && (data.playerId === current.playerId || data.playerId === current.id)) {
+        soundService.playError();
+        telegramSdk.triggerHaptic('error');
+      }
+    });
+
+    s.on('DAILY_JACKPOT_UPDATED', (data: { roundId: string; cardsSold: number; maxCards: number; status: any }) => {
+      setDailyJackpotState((prev) => prev ? { ...prev, cardsSold: data.cardsSold, status: data.status } : null);
+    });
+
+    s.on('DAILY_JACKPOT_EVALUATED', () => {
+      fetch(apiUrl('/api/daily-jackpot/current'))
+        .then(r => r.json())
+        .then(d => { if (d.success) setDailyJackpotState(d); })
+        .catch(console.error);
+    });
+
     s.on('BALL_DRAWN', (data: { roomId: string; ball: { letter: 'B' | 'I' | 'N' | 'G' | 'O'; number: number }; ballIndex: number; drawnBalls: number[] }) => {
       soundService.playBallDrop();
       soundService.speakBall(data.ball.letter, data.ball.number);
@@ -349,7 +393,7 @@ export default function App() {
         // Sync user wallet balance immediately
         if (userRef.current) {
           const t = auth.sessionToken || localStorage.getItem('bingo_auth_token');
-          fetch(`/api/user/${userRef.current.playerId}`, {
+          fetch(apiUrl(`/api/user/${userRef.current.playerId}`), {
             headers: t ? { Authorization: `Bearer ${t}` } : {}
           })
             .then((res) => res.json())
@@ -678,6 +722,8 @@ export default function App() {
           currency={currency}
           onSelectCurrency={setCurrency}
           onJoinRoom={handleJoinRoom}
+          onOpenDailyJackpot={() => setActiveModal('daily_jackpot')}
+          dailyJackpotState={dailyJackpotState}
           onOpenWallet={handleOpenDeposit}
           onOpenLeaderboard={() => setActiveModal('leaderboard')}
           onOpenReferral={() => setActiveModal('referral')}
@@ -690,7 +736,7 @@ export default function App() {
           onOpenMenu={handleOpenProfile}
           onOpenAdmin={() => setActiveModal('admin')}
           onRefresh={() => {
-            fetch('/api/rooms').then(r => r.json()).then(d => d.rooms && setRooms(d.rooms));
+            fetch(apiUrl('/api/rooms')).then(r => r.json()).then(d => d.rooms && setRooms(d.rooms));
           }}
         />
       )}
@@ -721,7 +767,7 @@ export default function App() {
           onSelectCurrency={setCurrency}
           onRefresh={() => {
             if (activeRoomId) {
-              fetch(`/api/room/${activeRoomId}`).then(r => r.json()).then(d => d && setGameState(d));
+              fetch(apiUrl(`/api/room/${activeRoomId}`)).then(r => r.json()).then(d => d && setGameState(d));
             }
           }}
         />
@@ -1047,6 +1093,18 @@ export default function App() {
         onClose={() => setActiveModal(null)}
         user={user}
         token={auth.sessionToken || localStorage.getItem('bingo_auth_token') || ''}
+      />
+
+      <DailyJackpotModal
+        isOpen={activeModal === 'daily_jackpot'}
+        onClose={() => setActiveModal(null)}
+        user={user}
+        onOpenWallet={handleOpenDeposit}
+        onOpenSignUp={() => handleOpenSignUp('register')}
+        onUpdateUser={(updatedUser) => {
+          setUser(updatedUser);
+          auth.updateUser(updatedUser);
+        }}
       />
     </div>
   );

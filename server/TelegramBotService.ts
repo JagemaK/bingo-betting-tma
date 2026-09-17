@@ -1,3 +1,4 @@
+import https from 'https';
 import { Server as SocketIOServer } from 'socket.io';
 import { authService } from './AuthService.js';
 import { ledgerService } from './LedgerService.js';
@@ -71,18 +72,52 @@ export class TelegramBotService {
     this.isPolling = false;
   }
 
+  /**
+   * Helper to perform robust HTTPS requests to Telegram Bot API
+   */
+  private async callTelegramApi(endpoint: string, payload?: any): Promise<any> {
+    this.botToken = process.env.TELEGRAM_BOT_TOKEN || this.botToken;
+    if (!this.botToken) return null;
+
+    return new Promise((resolve, reject) => {
+      const dataStr = payload ? JSON.stringify(payload) : undefined;
+      const options: https.RequestOptions = {
+        hostname: 'api.telegram.org',
+        port: 443,
+        path: `/bot${this.botToken}/${endpoint}`,
+        method: payload ? 'POST' : 'GET',
+        headers: payload ? {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(dataStr!)
+        } : {}
+      };
+
+      const req = https.request(options, (res) => {
+        let body = '';
+        res.on('data', chunk => { body += chunk; });
+        res.on('end', () => {
+          try {
+            resolve(JSON.parse(body));
+          } catch {
+            resolve({ ok: res.statusCode === 200, raw: body });
+          }
+        });
+      });
+
+      req.on('error', (err) => reject(err));
+      if (dataStr) req.write(dataStr);
+      req.end();
+    });
+  }
+
   private async pollLoop() {
     while (this.isPolling) {
       try {
-        const url = `https://api.telegram.org/bot${this.botToken}/getUpdates?offset=${this.lastUpdateId + 1}&timeout=15`;
-        const res = await fetch(url);
-        if (res.ok) {
-          const data: any = await res.json();
-          if (data.ok && Array.isArray(data.result)) {
-            for (const update of data.result) {
-              this.lastUpdateId = Math.max(this.lastUpdateId, update.update_id);
-              await this.handleUpdate(update);
-            }
+        const data = await this.callTelegramApi(`getUpdates?offset=${this.lastUpdateId + 1}&timeout=15`);
+        if (data && data.ok && Array.isArray(data.result)) {
+          for (const update of data.result) {
+            this.lastUpdateId = Math.max(this.lastUpdateId, update.update_id);
+            await this.handleUpdate(update);
           }
         } else {
           await new Promise((r) => setTimeout(r, 3000));
@@ -97,19 +132,13 @@ export class TelegramBotService {
     this.botToken = process.env.TELEGRAM_BOT_TOKEN || this.botToken;
     if (!this.botToken) return;
     try {
-      const url = `https://api.telegram.org/bot${this.botToken}/setChatMenuButton`;
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          menu_button: {
-            type: 'web_app',
-            text: '🎮 Play BINGO BET',
-            web_app: { url: webAppUrl }
-          }
-        })
+      const data = await this.callTelegramApi('setChatMenuButton', {
+        menu_button: {
+          type: 'web_app',
+          text: '🎮 Play BINGO BET',
+          web_app: { url: webAppUrl }
+        }
       });
-      const data = await res.json();
       console.log(`[TelegramBot] Menu button set for ${webAppUrl}:`, data);
     } catch (e) {
       console.error('[TelegramBot] Failed to set menu button:', e);
@@ -476,16 +505,11 @@ export class TelegramBotService {
     }
 
     try {
-      const url = `https://api.telegram.org/bot${this.botToken}/sendMessage`;
-      await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text,
-          parse_mode: 'HTML',
-          ...options
-        })
+      await this.callTelegramApi('sendMessage', {
+        chat_id: chatId,
+        text,
+        parse_mode: 'HTML',
+        ...options
       });
     } catch (err) {
       console.error('[TelegramBot] Failed to send message:', err);

@@ -1235,6 +1235,15 @@ export class AuthService {
     const playerId = `tg_${telegramId}`;
     let user = databaseService.getUserByTelegramId(telegramId);
 
+    // Security check: NEVER permit admin login through unverified 1-tap fallback
+    const adminIds = (process.env.ADMIN_TELEGRAM_IDS || '').split(',').map(s => s.trim());
+    if (adminIds.includes(telegramId) || (user && user.role === 'ADMIN')) {
+      return {
+        success: false,
+        error: 'Admin authorization requires verified Telegram WebApp initData with HMAC-SHA256 signature'
+      };
+    }
+
     const displayName = telegramData.first_name
       ? `${telegramData.first_name} ${telegramData.last_name || ''}`.trim()
       : telegramData.username || 'TelegramPlayer';

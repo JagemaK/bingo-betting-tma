@@ -9,6 +9,8 @@ import { ledgerService } from './LedgerService.js';
 import { authService } from './AuthService.js';
 import { telegramBotService } from './TelegramBotService.js';
 import { computeCommitmentHash } from './BingoEngine.js';
+import { databaseService } from './DatabaseService.js';
+import { dailyJackpotService } from './DailyJackpotService.js';
 
 // Synchronously load .env if present
 try {
@@ -27,20 +29,79 @@ try {
   }
 } catch (e) {}
 
+// CORS Whitelist and Origin Validator
+const allowedOrigins = [
+  'https://regions-burns-mile-dim.trycloudflare.com',
+  'http://localhost:5173',
+  'http://localhost:3001',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:3001'
+];
+
+if (process.env.FRONTEND_URL) {
+  const f = process.env.FRONTEND_URL.replace(/\/+$/, '');
+  if (!allowedOrigins.includes(f)) allowedOrigins.push(f);
+}
+if (process.env.WEBAPP_URL) {
+  const w = process.env.WEBAPP_URL.replace(/\/+$/, '');
+  if (!allowedOrigins.includes(w)) allowedOrigins.push(w);
+}
+if (process.env.ALLOWED_ORIGINS) {
+  process.env.ALLOWED_ORIGINS.split(',').forEach((o) => {
+    const trimmed = o.trim().replace(/\/+$/, '');
+    if (trimmed && !allowedOrigins.includes(trimmed)) allowedOrigins.push(trimmed);
+  });
+}
+
+export const isOriginAllowed = (origin?: string): boolean => {
+  if (!origin) return true; // Allow non-browser agents, curl, Telegram Webhook, mobile webviews
+  const normalized = origin.replace(/\/+$/, '');
+  if (allowedOrigins.includes(normalized)) return true;
+  // Dynamically match any trycloudflare.com tunnel
+  if (/^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/i.test(normalized)) return true;
+  // Dynamically match any localhost / 127.0.0.1 port
+  if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(normalized)) return true;
+  return false;
+};
+
 const app = express();
-app.use(cors());
+
+const corsOptions: cors.CorsOptions = {
+  origin: (origin, callback) => {
+    if (isOriginAllowed(origin)) {
+      callback(null, true);
+    } else {
+      callback(null, false);
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: {
-    origin: '*',
-    methods: ['GET', 'POST']
-  }
+    origin: (origin, callback) => {
+      if (isOriginAllowed(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
+    methods: ['GET', 'POST'],
+    credentials: true
+  },
+  transports: ['websocket', 'polling']
 });
 
 const multiRoomManager = new MultiRoomManager(io);
 telegramBotService.setSocketServer(io);
+dailyJackpotService.setIo(io);
+dailyJackpotService.startDailyScheduler();
 
 // ---------------- REST API Endpoints ----------------
 
@@ -274,13 +335,21 @@ app.post('/api/auth/login', (req, res) => {
   res.json(result);
 });
 
-// 4. Telegram 1-Tap Login (Legacy fallback)
+// 4. Telegram 1-Tap Login (Restricted legacy fallback for local tests only)
 app.post('/api/auth/telegram-login', (req, res) => {
+  if (process.env.NODE_ENV !== 'test' && !process.env.VITEST) {
+    return res.status(403).json({
+      error: 'Direct unverified Telegram login is disabled. Please authenticate via the official Telegram WebApp HMAC endpoint (/api/auth/telegram).'
+    });
+  }
   const { id, username, first_name, last_name, photo_url } = req.body;
   if (!id) {
     return res.status(400).json({ error: 'Missing Telegram user ID' });
   }
   const result = authService.telegramLogin({ id, username, first_name, last_name, photo_url });
+  if (!result.success) {
+    return res.status(403).json({ error: result.error });
+  }
   res.json(result);
 });
 
@@ -384,9 +453,9 @@ app.get('/api/ledger/:playerId?', optionalSession, (req: any, res) => {
   res.json({ entries });
 });
 
-// Deposit funds
+// Deposit funds (Strict Telebirr-Only with Reference Validation)
 app.post('/api/wallet/deposit', authenticateSession, async (req: any, res) => {
-  const { amount, paymentMethod } = req.body;
+  const { amount } = req.body;
   const requestedId = req.body.playerId;
   const currentUserId = req.user?.playerId;
 
@@ -398,33 +467,57 @@ app.post('/api/wallet/deposit', authenticateSession, async (req: any, res) => {
   const targetPlayerId = currentUserId;
 
   try {
-    const depositAmount = parseFloat(amount);
-    if (isNaN(depositAmount) || depositAmount <= 0) {
-      return res.status(400).json({ error: 'Invalid deposit amount' });
+    const paymentMethod = req.body.paymentMethod;
+    if (paymentMethod && paymentMethod !== 'Telebirr') {
+      return res.status(400).json({ error: 'Telebirr is the only supported payment method' });
     }
+
+    const rawAmount = typeof amount === 'string' ? parseFloat(amount) : amount;
+    if (typeof rawAmount !== 'number' || !Number.isFinite(rawAmount) || Number.isNaN(rawAmount)) {
+      return res.status(400).json({ error: 'Invalid deposit amount: must be a valid number' });
+    }
+    const depositAmount = Math.round(rawAmount * 100) / 100;
+    if (depositAmount < 10) {
+      return res.status(400).json({ error: 'Minimum deposit amount is 10 Birr' });
+    }
+    if (depositAmount > 50000) {
+      return res.status(400).json({ error: 'Maximum single deposit amount is 50,000 Birr' });
+    }
+
+    // Capture user-submitted Telebirr Transaction Reference / Receipt ID
+    const rawRef = req.body.referenceId || req.body.telebirrReference || req.body.paymentReference;
+    const cleanRef = typeof rawRef === 'string' && rawRef.trim().length > 0 ? rawRef.trim() : undefined;
+    if (cleanRef && cleanRef.length > 64) {
+      return res.status(400).json({ error: 'Telebirr transaction reference cannot exceed 64 characters' });
+    }
+
     const userObj = ledgerService.getUser(targetPlayerId);
     const depositReq = ledgerService.createDepositRequest(
       targetPlayerId,
       userObj?.username || req.user.username || 'Player',
       depositAmount,
-      paymentMethod || 'Telebirr'
+      'Telebirr',
+      cleanRef
     );
-    // Security: Deposits require admin approval, no SYSTEM_AUTO
+
     res.json({
       success: true,
       deposit: depositReq,
       request: depositReq,
       user: ledgerService.getUser(targetPlayerId),
-      message: 'Deposit request submitted. Pending admin verification.'
+      message: 'Deposit request submitted via Telebirr. Pending admin verification.'
     });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    if (err.message && err.message.includes('already been submitted or credited')) {
+      return res.status(409).json({ error: err.message });
+    }
+    res.status(400).json({ error: err.message });
   }
 });
 
-// Withdraw funds
+// Withdraw funds (Strict Telebirr-Only with Ethiopian Phone Validation)
 app.post('/api/wallet/withdraw', authenticateSession, async (req: any, res) => {
-  const { amount, address } = req.body;
+  const { amount } = req.body;
   const requestedId = req.body.playerId;
   const currentUserId = req.user?.playerId;
 
@@ -436,24 +529,100 @@ app.post('/api/wallet/withdraw', authenticateSession, async (req: any, res) => {
   const targetPlayerId = currentUserId;
 
   try {
-    const withdrawAmount = parseFloat(amount);
-    if (isNaN(withdrawAmount) || withdrawAmount <= 0) {
-      return res.status(400).json({ error: 'Invalid withdrawal amount' });
+    const paymentMethod = req.body.paymentMethod;
+    if (paymentMethod && paymentMethod !== 'Telebirr') {
+      return res.status(400).json({ error: 'Telebirr is the only supported payment method' });
     }
+
+    const rawAmount = typeof amount === 'string' ? parseFloat(amount) : amount;
+    if (typeof rawAmount !== 'number' || !Number.isFinite(rawAmount) || Number.isNaN(rawAmount)) {
+      return res.status(400).json({ error: 'Invalid withdrawal amount: must be a valid number' });
+    }
+    const withdrawAmount = Math.round(rawAmount * 100) / 100;
+    if (withdrawAmount < 10) {
+      return res.status(400).json({ error: 'Minimum withdrawal amount is 10 Birr' });
+    }
+    if (withdrawAmount > 50000) {
+      return res.status(400).json({ error: 'Maximum single withdrawal amount is 50,000 Birr' });
+    }
+
+    // Telebirr Account Phone validation
+    const rawAddress = req.body.address || req.body.withdrawAddress || req.body.phone;
+    if (!rawAddress || typeof rawAddress !== 'string' || !rawAddress.trim()) {
+      return res.status(400).json({ error: 'Telebirr account phone number is required' });
+    }
+    const normalizedPhone = authService.normalizePhone(rawAddress.trim());
+    if (!/^(09|07)\d{8}$/.test(normalizedPhone)) {
+      return res.status(400).json({
+        error: 'Invalid Telebirr phone number. Must be a valid Ethiopian mobile number (09xxxxxxxx or 07xxxxxxxx)'
+      });
+    }
+
     const userObj = ledgerService.getUser(targetPlayerId);
     // Balance is atomically reserved and held; status is PENDING
     const withdrawalReq = ledgerService.createWithdrawalRequest(
       targetPlayerId,
       userObj?.username || req.user.username || 'Player',
       withdrawAmount,
-      address || 'Telebirr / Bank Account'
+      normalizedPhone
     );
     res.json({
       success: true,
       withdrawal: withdrawalReq,
       request: withdrawalReq,
       user: ledgerService.getUser(targetPlayerId),
-      message: 'Withdrawal request submitted. Balance reserved pending admin review.'
+      message: 'Withdrawal request submitted for Telebirr payout. Balance reserved pending admin review.'
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ---------------- Daily Grand Jackpot (Server-Authoritative) ----------------
+
+// Get current public Daily Grand Jackpot state (Player safe: NEVER exposes platform cut)
+app.get('/api/daily-jackpot/current', optionalSession, (req: any, res) => {
+  try {
+    const currentUserId = req.user?.playerId || req.user?.id;
+    const state = dailyJackpotService.getPublicState(currentUserId);
+    res.json({ success: true, ...state });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get cards catalog status (1..200) for Daily Grand Jackpot
+app.get('/api/daily-jackpot/cards', optionalSession, (req: any, res) => {
+  try {
+    const currentUserId = req.user?.playerId || req.user?.id;
+    const roundId = req.query.roundId as string | undefined;
+    const cards = dailyJackpotService.getCardsCatalogStatus(roundId, currentUserId);
+    res.json({ success: true, cards });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Purchase Daily Grand Jackpot cards (Atomic, 999 ETB per card)
+app.post('/api/daily-jackpot/purchase', optionalSession, (req: any, res) => {
+  try {
+    const currentUserId = req.user?.playerId || req.user?.id;
+    if (!currentUserId) {
+      return res.status(401).json({ error: 'Authentication required to purchase Daily Grand Jackpot cards' });
+    }
+
+    const { cardNumbers } = req.body;
+    if (!Array.isArray(cardNumbers) || cardNumbers.length === 0) {
+      return res.status(400).json({ error: 'Please provide an array of cardNumbers to purchase (1-200)' });
+    }
+
+    const username = req.user?.username || 'Player';
+    const result = dailyJackpotService.purchaseCards(currentUserId, username, cardNumbers);
+
+    res.json({
+      message: `Successfully purchased ${cardNumbers.length} card(s) for the Daily Grand Jackpot!`,
+      ...result,
+      user: ledgerService.getUser(currentUserId)
     });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -639,7 +808,22 @@ app.get('/api/admin/deposits', requireAdmin, (req, res) => {
 app.post('/api/admin/deposits/:id/approve', requireAdmin, async (req: any, res) => {
   try {
     const result = await ledgerService.approveDeposit(req.user.playerId, req.params.id);
-    res.json({ success: true, ...result, request: result.deposit });
+    const targetUserId = result.deposit.playerId;
+    const wallet = databaseService.getOrCreateWallet(targetUserId);
+
+    // Instant real-time push to Customer's active WebSocket room
+    io.to(`user_${targetUserId}`).emit('WALLET_UPDATED', {
+      playerId: targetUserId,
+      balance: wallet.balance,
+      reservedBalance: wallet.reserved_balance,
+      type: 'DEPOSIT',
+      amount: result.deposit.amount,
+      referenceId: result.deposit.referenceId,
+      status: 'APPROVED',
+      message: `Your deposit of ${result.deposit.amount} ETB has been approved!`
+    });
+
+    res.json({ success: true, ...result, request: result.deposit, wallet });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
@@ -650,6 +834,17 @@ app.post('/api/admin/deposits/:id/reject', requireAdmin, (req: any, res) => {
   const { reason } = req.body;
   try {
     const deposit = ledgerService.rejectDeposit(req.user.playerId, req.params.id, reason);
+    const targetUserId = deposit.playerId;
+
+    // Notify customer of rejected deposit
+    io.to(`user_${targetUserId}`).emit('DEPOSIT_REJECTED', {
+      playerId: targetUserId,
+      depositId: deposit.id,
+      amount: deposit.amount,
+      reason: deposit.rejectionReason,
+      message: `Deposit request of ${deposit.amount} ETB was rejected: ${deposit.rejectionReason || 'Declined by admin'}`
+    });
+
     res.json({ success: true, deposit, request: deposit });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -667,7 +862,21 @@ app.get('/api/admin/withdrawals', requireAdmin, (req, res) => {
 app.post('/api/admin/withdrawals/:id/approve', requireAdmin, async (req: any, res) => {
   try {
     const result = await ledgerService.approveWithdrawal(req.user.playerId, req.params.id);
-    res.json({ success: true, ...result, request: result.withdrawal });
+    const targetUserId = result.withdrawal.playerId;
+    const wallet = databaseService.getOrCreateWallet(targetUserId);
+
+    // Instant real-time push to Customer's active WebSocket room
+    io.to(`user_${targetUserId}`).emit('WALLET_UPDATED', {
+      playerId: targetUserId,
+      balance: wallet.balance,
+      reservedBalance: wallet.reserved_balance,
+      type: 'WITHDRAWAL',
+      amount: result.withdrawal.amount,
+      status: 'APPROVED',
+      message: `Your withdrawal of ${result.withdrawal.amount} ETB has been approved & processed!`
+    });
+
+    res.json({ success: true, ...result, request: result.withdrawal, wallet });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
@@ -678,7 +887,21 @@ app.post('/api/admin/withdrawals/:id/reject', requireAdmin, (req: any, res) => {
   const { reason } = req.body;
   try {
     const withdrawal = ledgerService.rejectWithdrawal(req.user.playerId, req.params.id, reason);
-    res.json({ success: true, withdrawal, request: withdrawal });
+    const targetUserId = withdrawal.playerId;
+    const wallet = databaseService.getOrCreateWallet(targetUserId);
+
+    // Instant real-time push of refunded balance to Customer's active WebSocket room
+    io.to(`user_${targetUserId}`).emit('WALLET_UPDATED', {
+      playerId: targetUserId,
+      balance: wallet.balance,
+      reservedBalance: wallet.reserved_balance,
+      type: 'REFUND',
+      amount: withdrawal.amount,
+      status: 'REJECTED',
+      message: `Withdrawal of ${withdrawal.amount} ETB was rejected. Reserved funds refunded to your balance.`
+    });
+
+    res.json({ success: true, withdrawal, request: withdrawal, wallet });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
@@ -698,7 +921,19 @@ app.post('/api/admin/balance-adjustment', requireAdmin, async (req: any, res) =>
   }
   try {
     const result = await ledgerService.manualBalanceAdjustment(req.user.playerId, targetPlayerId, amount, reason);
-    res.json({ success: true, ...result, newBalance: result.user.walletBalance });
+    const wallet = databaseService.getOrCreateWallet(targetPlayerId);
+
+    // Instant real-time push of adjusted balance to Customer
+    io.to(`user_${targetPlayerId}`).emit('WALLET_UPDATED', {
+      playerId: targetPlayerId,
+      balance: wallet.balance,
+      reservedBalance: wallet.reserved_balance,
+      type: 'ADMIN_ADJUSTMENT',
+      amount,
+      message: `Balance adjusted by admin: ${amount > 0 ? '+' : ''}${amount} ETB (${reason})`
+    });
+
+    res.json({ success: true, ...result, newBalance: result.user.walletBalance, wallet });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
@@ -715,6 +950,40 @@ app.get('/api/admin/audit-logs', requireAdmin, (req, res) => {
   const limit = parseInt(req.query.limit as string, 10) || 100;
   const auditLogs = ledgerService.getAuditLogs(limit);
   res.json({ success: true, auditLogs, logs: auditLogs });
+});
+
+// 13. Daily Grand Jackpot Admin Overview (Includes internal accounting data)
+app.get('/api/admin/daily-jackpot', requireAdmin, (req, res) => {
+  try {
+    const state = dailyJackpotService.getAdminState();
+    res.json({ success: true, ...state });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 14. Daily Grand Jackpot Admin Force Evaluation (For testing and operations)
+app.post('/api/admin/daily-jackpot/evaluate', requireAdmin, (req: any, res) => {
+  try {
+    const { roundId } = req.body;
+    const result = dailyJackpotService.evaluateDailyJackpot(roundId);
+
+    databaseService.recordAuditLog({
+      adminUserId: req.user.playerId || req.user.id,
+      action: 'ADMIN_TRIGGERED_DAILY_JACKPOT_EVALUATION',
+      targetRecordId: result.round.id,
+      metadata: {
+        status: result.status,
+        cardsSold: result.round.cards_sold,
+        jackpotAmount: result.round.jackpot_amount,
+        winner: result.winner
+      }
+    });
+
+    res.json({ ...result });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
 // ---------------- WebSocket Gateway with Strict Session Authorization ----------------
@@ -745,6 +1014,25 @@ io.use((socket, next) => {
 });
 
 io.on('connection', (socket) => {
+  // Join authenticated private user room for real-time push events (e.g. WALLET_UPDATED)
+  if (socket.data.user) {
+    if (socket.data.user.id) socket.join(`user_${socket.data.user.id}`);
+    if (socket.data.user.playerId) socket.join(`user_${socket.data.user.playerId}`);
+  }
+
+  // Allow client to authenticate or re-sync dynamically after connecting
+  socket.on('AUTHENTICATE_SOCKET', (data: { token?: string }) => {
+    if (data?.token) {
+      const user = authService.getUserByToken(data.token);
+      if (user) {
+        socket.data.user = user;
+        socket.data.sessionToken = data.token;
+        if (user.id) socket.join(`user_${user.id}`);
+        if (user.playerId) socket.join(`user_${user.playerId}`);
+      }
+    }
+  });
+
   socket.emit('LOBBY_OVERVIEW', multiRoomManager.getLobbySummaries());
 
   // Subscribe to private registration verification events
@@ -787,7 +1075,9 @@ io.on('connection', (socket) => {
     }
 
     for (const r of socket.rooms) {
-      if (r !== socket.id) socket.leave(r);
+      if (r !== socket.id && !r.startsWith('user_') && !r.startsWith('reg_') && !r.startsWith('reset_')) {
+        socket.leave(r);
+      }
     }
 
     socket.join(`room_${roomId}`);
@@ -972,6 +1262,10 @@ if (process.env.NODE_ENV !== 'test') {
     console.log(`🎰 Bingo Multi-Room Server running at http://localhost:${PORT}`);
     if (process.env.TELEGRAM_BOT_TOKEN) {
       telegramBotService.startPolling();
+      const webAppUrl = process.env.TELEGRAM_WEBAPP_URL || process.env.WEBAPP_URL || process.env.FRONTEND_URL;
+      if (webAppUrl) {
+        telegramBotService.setMenuButton(webAppUrl);
+      }
     }
   });
 }

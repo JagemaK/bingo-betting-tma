@@ -106,6 +106,7 @@ CREATE TABLE IF NOT EXISTS deposit_requests (
 
 CREATE INDEX IF NOT EXISTS idx_deposits_user ON deposit_requests(user_id);
 CREATE INDEX IF NOT EXISTS idx_deposits_status ON deposit_requests(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_deposits_reference_unique ON deposit_requests(reference_id) WHERE reference_id IS NOT NULL;
 
 -- 7. Withdrawal Requests table (Balance reservation and approval workflow)
 CREATE TABLE IF NOT EXISTS withdrawal_requests (
@@ -216,3 +217,45 @@ CREATE TABLE IF NOT EXISTS pending_registrations (
 
 CREATE INDEX IF NOT EXISTS idx_pending_reg_phone ON pending_registrations(phone);
 CREATE INDEX IF NOT EXISTS idx_pending_reg_telegram_id ON pending_registrations(telegram_user_id);
+
+-- 14. Daily Grand Jackpot Rounds table (Authoritative daily 12:00 PM Addis Ababa jackpot lifecycle)
+CREATE TABLE IF NOT EXISTS daily_jackpot_rounds (
+    id TEXT PRIMARY KEY,
+    date_str TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'REGISTRATION_OPEN' CHECK(status IN ('SCHEDULED', 'REGISTRATION_OPEN', 'REGISTRATION_CLOSED', 'CHECKING_ELIGIBILITY', 'POSTPONED', 'JACKPOT_READY', 'GAME_RUNNING', 'WINNER_FOUND', 'JACKPOT_PAID', 'COMPLETED')),
+    cards_sold INTEGER NOT NULL DEFAULT 0 CHECK(cards_sold >= 0 AND cards_sold <= 200),
+    gross_sales REAL NOT NULL DEFAULT 0.0 CHECK(gross_sales >= 0.0),
+    jackpot_amount REAL NOT NULL DEFAULT 0.0 CHECK(jackpot_amount >= 0.0),
+    platform_retained_amount REAL NOT NULL DEFAULT 0.0,
+    cutoff_at TEXT NOT NULL,
+    checked_at TEXT,
+    postponement_reason TEXT,
+    winner_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+    winner_ticket_id TEXT,
+    winner_card_number INTEGER,
+    winner_username TEXT,
+    payout_status TEXT NOT NULL DEFAULT 'PENDING' CHECK(payout_status IN ('PENDING', 'PAID', 'NOT_APPLICABLE')),
+    paid_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_daily_jackpot_date ON daily_jackpot_rounds(date_str);
+CREATE INDEX IF NOT EXISTS idx_daily_jackpot_status ON daily_jackpot_rounds(status);
+
+-- 15. Daily Grand Jackpot Tickets table (Purchased 75-ball catalog tickets 1..200)
+CREATE TABLE IF NOT EXISTS daily_jackpot_tickets (
+    id TEXT PRIMARY KEY,
+    round_id TEXT NOT NULL REFERENCES daily_jackpot_rounds(id) ON DELETE CASCADE,
+    card_number INTEGER NOT NULL CHECK(card_number >= 1 AND card_number <= 200),
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    username TEXT NOT NULL,
+    price REAL NOT NULL DEFAULT 999.0,
+    grid_json TEXT NOT NULL,
+    fingerprint_hash TEXT NOT NULL,
+    purchased_at TEXT NOT NULL,
+    UNIQUE(round_id, card_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_daily_jackpot_tickets_round ON daily_jackpot_tickets(round_id);
+CREATE INDEX IF NOT EXISTS idx_daily_jackpot_tickets_user ON daily_jackpot_tickets(user_id);
