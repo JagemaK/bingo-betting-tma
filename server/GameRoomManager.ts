@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { Server } from 'socket.io';
 import {
   generate75BallCard,
@@ -13,7 +14,7 @@ import {
   WinningPatternResult
 } from './BingoEngine.js';
 import { ledgerService, UserAccount } from './LedgerService.js';
-import { databaseService } from './DatabaseService.js';
+import { databaseService, DatabaseService } from './DatabaseService.js';
 
 export type GameStatus = 'lobby' | 'active' | 'finished';
 
@@ -26,6 +27,9 @@ export interface PurchasedTicket {
   fingerprintHash: string;
   purchasedAt: string;
   isBot?: boolean;
+  bonusPaid?: number;
+  cashPaid?: number;
+  bonusConsumedRecords?: Array<{ rewardId: string; amount: number }>;
 }
 
 export interface WinnerRecord {
@@ -165,11 +169,15 @@ export class GameRoom {
     }
   }
 
-  constructor(io: Server, config: RoomConfig) {
+  private db: DatabaseService;
+
+  constructor(io: Server, config: RoomConfig, db: DatabaseService = databaseService) {
     this.io = io;
     this.config = config;
+    this.db = db;
     this.lobbyTimeRemaining = 20;
     this.initNewGame();
+    this.recoverOrRefundAbandonedGames();
   }
 
   public initNewGame() {
@@ -195,7 +203,7 @@ export class GameRoom {
 
     // Persist game to authoritative database
     try {
-      databaseService.createGame({
+      (this.db || databaseService).createGame({
         id: this.gameId,
         roomId: this.config.roomId,
         betPerCard: this.config.betPerCard,
@@ -203,11 +211,70 @@ export class GameRoom {
         commitmentHash: this.getCommitmentHash()
       });
     } catch (e) {
-      // Ignore in mock/unit contexts
+      console.warn(`[GameRoom] Warning persisting game ${this.gameId} to DB:`, (e as any).message);
     }
+
+    console.log(`[GameRoom ${this.config.roomId}] New Game initialized: ${this.gameId}`);
 
     // No demo bots. Countdown starts only when 5 cards are selected!
     this.broadcastState();
+  }
+
+  /**
+   * VULN-06 Recovery: Scans database for abandoned games in this room and refunds human players
+   */
+  public recoverOrRefundAbandonedGames(): number {
+    let refundedTicketsCount = 0;
+    try {
+      const dbInstance = this.db || databaseService;
+      const abandonedGames = dbInstance.getActiveOrLobbyGames(this.config.roomId);
+      for (const game of abandonedGames) {
+        // Only process previous games, not the currently initialized one
+        if (game.id === this.gameId) continue;
+
+        console.log(`[GameRoomManager] Recovering abandoned game ${game.id} in room ${this.config.roomId}...`);
+        const tickets = dbInstance.getTicketsForGame(game.id);
+
+        for (const ticket of tickets) {
+          if (ticket.is_bot) continue; // Skip bot tickets
+
+          const refundRef = `refund_game_${ticket.id}`;
+          const existingRefund = dbInstance.getLedgerTransactionByReference(refundRef);
+          if (existingRefund) continue; // Already refunded
+
+          // Atomically refund bet to player wallet and record ledger entry
+          try {
+            dbInstance.transaction(() => {
+              const wallet = dbInstance.getOrCreateWallet(ticket.user_id);
+              const refundAmount = game.bet_per_card;
+
+              dbInstance.recordLedgerTransaction({
+                userId: ticket.user_id,
+                username: ticket.username,
+                type: 'REFUND',
+                amount: refundAmount,
+                gameId: game.id,
+                ticketId: ticket.id,
+                referenceId: refundRef,
+                description: `Automatic refund for crashed/interrupted game ${game.id} (Card #${ticket.card_number})`
+              });
+              refundedTicketsCount++;
+            });
+          } catch (err: any) {
+            console.error(`[GameRoomManager] Error refunding ticket ${ticket.id}:`, err.message);
+          }
+        }
+
+        // Mark abandoned game as finished with cancellation timestamp
+        dbInstance.updateGame(game.id, {
+          status: 'finished',
+          finished_at: new Date().toISOString()
+        });
+      }
+    } catch (e: any) {
+      console.warn(`[GameRoomManager] Abandoned game recovery warning for room ${this.config.roomId}:`, e.message);
+    }
+    return refundedTicketsCount;
   }
 
   private clearTimers() {
@@ -437,14 +504,46 @@ export class GameRoom {
 
     const grid = this.cardCatalog.get(cardNumber) || generate75BallCard();
 
+    let bonusPaid = 0;
+    let cashPaid = this.config.betPerCard;
+    let bonusConsumedRecords: Array<{ rewardId: string; amount: number }> = [];
+
     if (!isBot) {
-      await ledgerService.recordTransaction(
-        playerId,
-        'buy_in',
-        this.config.betPerCard,
-        `Bingo Card #${cardNumber} for ${this.config.roomName} (${this.gameId})`,
-        this.gameId
-      );
+      databaseService.transaction(() => {
+        const split = databaseService.rewardService.consumeBonusForPurchase(
+          playerId,
+          this.config.betPerCard,
+          'BINGO_CARD',
+          this.gameId
+        );
+        bonusPaid = split.bonusPaid;
+        cashPaid = split.cashPaid;
+        bonusConsumedRecords = split.bonusConsumedRecords;
+
+        const wallet = databaseService.getWallet(playerId)!;
+        const entryId = `tx_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+        let desc = `Bingo Card #${cardNumber} for ${this.config.roomName} (${this.gameId})`;
+        if (bonusPaid > 0) {
+          desc += ` [Paid: ${bonusPaid.toFixed(2)} Bonus + ${cashPaid.toFixed(2)} Cash]`;
+        }
+
+        (databaseService as any).db.prepare(`
+          INSERT INTO ledger_transactions (
+            id, user_id, username, type, amount, balance_before, balance_after,
+            game_id, description, created_at
+          ) VALUES (?, ?, ?, 'BET', ?, ?, ?, ?, ?, ?)
+        `).run(
+          entryId,
+          playerId,
+          username,
+          this.config.betPerCard,
+          wallet.balance + cashPaid,
+          wallet.balance,
+          this.gameId,
+          desc,
+          new Date().toISOString()
+        );
+      });
     }
 
     const fingerprintHash = computeTicketFingerprint(grid, playerId, this.gameId, this.serverSecret);
@@ -458,7 +557,10 @@ export class GameRoom {
       grid,
       fingerprintHash,
       purchasedAt: new Date().toISOString(),
-      isBot
+      isBot,
+      bonusPaid,
+      cashPaid,
+      bonusConsumedRecords
     };
 
     this.tickets.set(ticketId, ticket);
@@ -547,13 +649,38 @@ export class GameRoom {
     }
 
     if (!ticket.isBot) {
-      await ledgerService.recordTransaction(
-        playerId,
-        'refund',
-        this.config.betPerCard,
-        `Refund for Bingo Card #${cardNumber} (${this.gameId})`,
-        this.gameId
-      );
+      databaseService.transaction(() => {
+        databaseService.rewardService.refundPurchase(
+          playerId,
+          ticket.bonusPaid || 0,
+          ticket.cashPaid || 0,
+          ticket.bonusConsumedRecords
+        );
+
+        let desc = `Refund for Bingo Card #${cardNumber} (${this.gameId})`;
+        if ((ticket.bonusPaid || 0) > 0) {
+          desc += ` [Refunded: ${(ticket.bonusPaid || 0).toFixed(2)} Bonus + ${(ticket.cashPaid || 0).toFixed(2)} Cash]`;
+        }
+
+        const wallet = databaseService.getWallet(playerId)!;
+        const entryId = `tx_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+        (databaseService as any).db.prepare(`
+          INSERT INTO ledger_transactions (
+            id, user_id, username, type, amount, balance_before, balance_after,
+            game_id, description, created_at
+          ) VALUES (?, ?, ?, 'REFUND', ?, ?, ?, ?, ?, ?)
+        `).run(
+          entryId,
+          playerId,
+          ticket.username,
+          this.config.betPerCard,
+          wallet.balance - (ticket.cashPaid || 0),
+          wallet.balance,
+          this.gameId,
+          desc,
+          new Date().toISOString()
+        );
+      });
     }
 
     this.broadcastState();
@@ -816,3 +943,5 @@ export class MultiRoomManager {
     return this.rooms.get(roomId);
   }
 }
+
+export { GameRoom as GameRoomManager };

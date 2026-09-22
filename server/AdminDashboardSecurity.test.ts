@@ -125,8 +125,8 @@ describe('Admin Dashboard Security & Operations Test Suite', () => {
     expect(suspendData.success).toBe(true);
     expect(suspendData.user.account_status).toBe('SUSPENDED');
 
-    // Verify user record in AuthService
-    const updated = authService.getUserByToken(normalUserToken);
+    // Verify user record by DB lookup (session is invalid for SUSPENDED users - that is correct VULN-05 behavior)
+    const updated = authService.getFullUserRecordByToken(normalUserToken);
     expect(updated?.account_status).toBe('SUSPENDED');
 
     // Verify audit log
@@ -166,7 +166,7 @@ describe('Admin Dashboard Security & Operations Test Suite', () => {
     expect(req.id).toBeDefined();
     expect(req.status).toBe('PENDING');
 
-    const balanceBefore = (authService.getUserByToken(normalUserToken))!.walletBalance;
+    const balanceBefore = (authService.getFullUserRecordByToken(normalUserToken))!.walletBalance;
 
     // 2. Admin approves deposit
     const approveRes = await fetch(`${BASE_URL}/api/admin/deposits/${req.id}/approve`, {
@@ -180,7 +180,7 @@ describe('Admin Dashboard Security & Operations Test Suite', () => {
     expect(approveData.request.status).toBe('APPROVED');
 
     // Verify user balance credited
-    const balanceAfter = (authService.getUserByToken(normalUserToken))!.walletBalance;
+    const balanceAfter = (authService.getFullUserRecordByToken(normalUserToken))!.walletBalance;
     expect(balanceAfter).toBe(balanceBefore + 250);
 
     // 3. Double processing protection: Same deposit cannot be approved twice

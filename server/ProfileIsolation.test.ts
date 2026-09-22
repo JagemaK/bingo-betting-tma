@@ -282,6 +282,6 @@ describe('Cross-User Player Profile Isolation & Security Test Suite', () => {
     });
     expect(res.status).toBe(200);
     const data = await res.json();
-    expect(data.profile.phone).toBe('0987654321');
+    expect(data.profile.phone).toBe('+251987654321');
   });
 });

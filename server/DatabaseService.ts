@@ -2,9 +2,16 @@ import { createRequire } from 'module';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { fileURLToPath } from 'url';
+import { normalizeEthiopianPhone } from './PhoneUtils.js';
+import { RewardService, PromotionalReward } from './RewardService.js';
 
 const require = createRequire(import.meta.url);
 const { DatabaseSync } = require('node:sqlite');
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const projectRoot = path.resolve(__dirname, '..');
 
 export interface UserRow {
   id: string;
@@ -42,6 +49,26 @@ export interface WalletRow {
   user_id: string;
   balance: number;
   reserved_balance: number;
+  bonus_balance: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PromotionalRewardRow {
+  id: string;
+  user_id: string;
+  reward_type: 'FIRST_DEPOSIT_BONUS';
+  source: string;
+  qualifying_deposit_id: string;
+  deposit_amount: number;
+  bonus_percentage: number;
+  bonus_amount: number;
+  remaining_amount: number;
+  status: 'AWARDED' | 'PARTIALLY_CONSUMED' | 'CONSUMED' | 'EXPIRED';
+  issued_at: string;
+  expires_at: string;
+  consumed_at?: string;
+  expired_at?: string;
   created_at: string;
   updated_at: string;
 }
@@ -50,7 +77,7 @@ export interface LedgerRow {
   id: string;
   user_id: string;
   username: string;
-  type: 'DEPOSIT' | 'BET' | 'WIN_PAYOUT' | 'WITHDRAWAL' | 'REFUND' | 'BONUS' | 'LOSS' | 'ADMIN_ADJUSTMENT';
+  type: 'DEPOSIT' | 'BET' | 'WIN_PAYOUT' | 'WITHDRAWAL' | 'REFUND' | 'BONUS' | 'LOSS' | 'ADMIN_ADJUSTMENT' | 'ESCROW_HOLD';
   amount: number;
   balance_before: number;
   balance_after: number;
@@ -184,11 +211,15 @@ export interface DailyJackpotTicketRow {
 export class DatabaseService {
   private db: any;
   private isMemory: boolean;
+  public readonly dbPath: string;
+  public readonly rewardService: RewardService;
 
   constructor(customPath?: string) {
-    const isTest = process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST);
-    const dbPath = customPath || (isTest ? ':memory:' : path.resolve(process.cwd(), 'data', 'bingo.db'));
+    const isTest = (process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST)) && !customPath && !process.env.TEST_PERSISTENT_DB;
+    const defaultDbPath = path.resolve(projectRoot, 'data', 'bingo.db');
+    const dbPath = customPath || (isTest ? ':memory:' : defaultDbPath);
 
+    this.dbPath = dbPath;
     this.isMemory = dbPath === ':memory:';
 
     if (!this.isMemory) {
@@ -196,10 +227,12 @@ export class DatabaseService {
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
+      console.log(`[DatabaseService] Authoritative database initialized: ${dbPath}`);
     }
 
     this.db = new DatabaseSync(dbPath);
     this.initSchema();
+    this.rewardService = new RewardService(this.db);
   }
 
   private initSchema() {
@@ -208,7 +241,7 @@ export class DatabaseService {
       this.db.exec('PRAGMA journal_mode = WAL;');
     }
 
-    const schemaPath = path.resolve(process.cwd(), 'db', 'schema.sql');
+    const schemaPath = path.resolve(projectRoot, 'db', 'schema.sql');
     if (fs.existsSync(schemaPath)) {
       const schemaSql = fs.readFileSync(schemaPath, 'utf8');
       this.db.exec(schemaSql);
@@ -234,6 +267,33 @@ export class DatabaseService {
         console.log('[DatabaseService] Running migration: adding password_salt to users table');
         this.db.exec('ALTER TABLE users ADD COLUMN password_salt TEXT DEFAULT NULL;');
       }
+
+      // Canonical E.164 Phone Normalization Migration
+      try {
+        const usersWithPhone = this.db.prepare('SELECT id, phone FROM users WHERE phone IS NOT NULL').all() as Array<{ id: string; phone: string }>;
+        const updatePhoneStmt = this.db.prepare('UPDATE users SET phone = ? WHERE id = ?');
+        for (const u of usersWithPhone) {
+          const norm = normalizeEthiopianPhone(u.phone);
+          if (norm && norm !== u.phone) {
+            updatePhoneStmt.run(norm, u.id);
+          }
+        }
+
+        // Migrate pending_registrations if any exist
+        const pendingWithPhone = this.db.prepare('SELECT id, phone FROM pending_registrations WHERE phone IS NOT NULL').all() as Array<{ id: string; phone: string }>;
+        const updatePendingStmt = this.db.prepare('UPDATE pending_registrations SET phone = ? WHERE id = ?');
+        for (const p of pendingWithPhone) {
+          const norm = normalizeEthiopianPhone(p.phone);
+          if (norm && norm !== p.phone) {
+            updatePendingStmt.run(norm, p.id);
+          }
+        }
+      } catch (phoneMigErr) {
+        console.warn('[DatabaseService] Phone migration check warning:', phoneMigErr);
+      }
+
+      // Unique index on normalized phone numbers
+      this.db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone_unique ON users(phone) WHERE phone IS NOT NULL;');
 
       // Telebirr reference uniqueness database-level constraint
       this.db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_deposits_reference_unique ON deposit_requests(reference_id) WHERE reference_id IS NOT NULL;');
@@ -277,6 +337,43 @@ export class DatabaseService {
         );
         CREATE INDEX IF NOT EXISTS idx_daily_jackpot_tickets_round ON daily_jackpot_tickets(round_id);
         CREATE INDEX IF NOT EXISTS idx_daily_jackpot_tickets_user ON daily_jackpot_tickets(user_id);
+      `);
+
+      // Migration: bonus_balance on wallets
+      try {
+        const walletCols = this.db.prepare('PRAGMA table_info(wallets)').all() as Array<{ name: string }>;
+        const walletColNames = new Set(walletCols.map((c: any) => c.name));
+        if (!walletColNames.has('bonus_balance')) {
+          console.log('[DatabaseService] Running migration: adding bonus_balance to wallets table');
+          this.db.exec('ALTER TABLE wallets ADD COLUMN bonus_balance REAL NOT NULL DEFAULT 0.0 CHECK(bonus_balance >= 0.0);');
+        }
+      } catch (walletMigErr) {
+        console.warn('[DatabaseService] Wallet migration check warning:', walletMigErr);
+      }
+
+      // Migration: promotional_rewards table
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS promotional_rewards (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          reward_type TEXT NOT NULL DEFAULT 'FIRST_DEPOSIT_BONUS',
+          source TEXT NOT NULL DEFAULT 'TELEBIRR_DEPOSIT',
+          qualifying_deposit_id TEXT NOT NULL UNIQUE REFERENCES deposit_requests(id),
+          deposit_amount REAL NOT NULL CHECK(deposit_amount > 0),
+          bonus_percentage REAL NOT NULL DEFAULT 10.0,
+          bonus_amount REAL NOT NULL CHECK(bonus_amount > 0 AND bonus_amount <= 50.0),
+          remaining_amount REAL NOT NULL CHECK(remaining_amount >= 0.0 AND remaining_amount <= bonus_amount),
+          status TEXT NOT NULL CHECK(status IN ('AWARDED', 'PARTIALLY_CONSUMED', 'CONSUMED', 'EXPIRED')),
+          issued_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          consumed_at TEXT,
+          expired_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_rewards_user ON promotional_rewards(user_id);
+        CREATE INDEX IF NOT EXISTS idx_rewards_status_expires ON promotional_rewards(status, expires_at);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_rewards_user_first_deposit ON promotional_rewards(user_id) WHERE reward_type = 'FIRST_DEPOSIT_BONUS';
       `);
     } catch (err) {
       console.error('[DatabaseService] Migration check warning:', err);
@@ -334,6 +431,9 @@ export class DatabaseService {
     created_at?: string;
   }): UserRow {
     const now = new Date().toISOString();
+    const normalizedPhone = user.phone ? (normalizeEthiopianPhone(user.phone) || user.phone) : null;
+    const effectiveTgId = user.telegram_id || (normalizedPhone ? `phone_${normalizedPhone}` : `web_${user.id}`);
+
     const stmt = this.db.prepare(`
       INSERT INTO users (
         id, telegram_id, telegram_username, first_name, last_name,
@@ -345,12 +445,12 @@ export class DatabaseService {
 
     stmt.run(
       user.id,
-      user.telegram_id,
+      effectiveTgId,
       user.telegram_username || null,
       user.first_name || null,
       user.last_name || null,
       user.username,
-      user.phone || null,
+      normalizedPhone,
       user.password_hash || null,
       user.password_salt || null,
       user.referral_code,
@@ -392,16 +492,29 @@ export class DatabaseService {
   }
 
   public getUserByPhone(phone: string): UserRow | undefined {
-    const stmt = this.db.prepare('SELECT * FROM users WHERE phone = ?');
-    return stmt.get(phone) as UserRow | undefined;
+    if (!phone) return undefined;
+    const normalized = normalizeEthiopianPhone(phone);
+    if (normalized) {
+      const stmt = this.db.prepare('SELECT * FROM users WHERE phone = ?');
+      const user = stmt.get(normalized) as UserRow | undefined;
+      if (user) return user;
+    }
+
+    // Fallback lookup: check raw input or local 09... format if unmigrated
+    const fallbackStmt = this.db.prepare('SELECT * FROM users WHERE phone = ?');
+    let fallback = fallbackStmt.get(phone) as UserRow | undefined;
+    if (!fallback && phone.startsWith('+251')) {
+      fallback = fallbackStmt.get('0' + phone.substring(4)) as UserRow | undefined;
+    }
+    return fallback;
   }
 
   public updateUser(
     id: string,
-    updates: Partial<Omit<UserRow, 'id' | 'telegram_id' | 'created_at'>>
+    updates: Partial<Omit<UserRow, 'id' | 'created_at'>>
   ): UserRow {
     const allowed = [
-      'telegram_username', 'first_name', 'last_name', 'username',
+      'telegram_id', 'telegram_username', 'first_name', 'last_name', 'username',
       'phone', 'password_hash', 'password_salt', 'referral_code', 'referred_by', 'role',
       'account_status', 'registration_status', 'avatar_url',
       'is_bot', 'last_login_at'
@@ -410,8 +523,11 @@ export class DatabaseService {
     const fields: string[] = [];
     const values: any[] = [];
 
-    for (const [key, val] of Object.entries(updates)) {
+    for (let [key, val] of Object.entries(updates)) {
       if (allowed.includes(key)) {
+        if (key === 'phone' && typeof val === 'string') {
+          val = normalizeEthiopianPhone(val) || val;
+        }
         fields.push(`${key} = ?`);
         values.push(key === 'is_bot' ? (val ? 1 : 0) : val);
       }
@@ -498,8 +614,8 @@ export class DatabaseService {
 
     const now = new Date().toISOString();
     const stmt = this.db.prepare(`
-      INSERT INTO wallets (user_id, balance, reserved_balance, created_at, updated_at)
-      VALUES (?, ?, 0.0, ?, ?)
+      INSERT INTO wallets (user_id, balance, reserved_balance, bonus_balance, created_at, updated_at)
+      VALUES (?, ?, 0.0, 0.0, ?, ?)
     `);
     stmt.run(userId, initialBalance, now, now);
 
@@ -507,6 +623,7 @@ export class DatabaseService {
       user_id: userId,
       balance: initialBalance,
       reserved_balance: 0.0,
+      bonus_balance: 0.0,
       created_at: now,
       updated_at: now
     };
@@ -514,15 +631,21 @@ export class DatabaseService {
 
   public getWallet(userId: string): WalletRow | undefined {
     const stmt = this.db.prepare('SELECT * FROM wallets WHERE user_id = ?');
-    return stmt.get(userId) as WalletRow | undefined;
+    const row = stmt.get(userId) as any;
+    if (!row) return undefined;
+    if (row.bonus_balance === undefined || row.bonus_balance === null) {
+      row.bonus_balance = 0.0;
+    }
+    return row as WalletRow;
   }
 
-  public updateWalletBalance(userId: string, balance: number, reserved: number = 0): void {
+  public updateWalletBalance(userId: string, balance: number, reserved: number = 0, bonus: number = 0): void {
     this.getOrCreateWallet(userId);
     const cleanBalance = Math.round(balance * 100) / 100;
     const cleanReserved = Math.round(reserved * 100) / 100;
-    this.db.prepare(`UPDATE wallets SET balance = ?, reserved_balance = ?, updated_at = ? WHERE user_id = ?`)
-      .run(cleanBalance, cleanReserved, new Date().toISOString(), userId);
+    const cleanBonus = Math.max(0, Math.round(bonus * 100) / 100);
+    this.db.prepare(`UPDATE wallets SET balance = ?, reserved_balance = ?, bonus_balance = ?, updated_at = ? WHERE user_id = ?`)
+      .run(cleanBalance, cleanReserved, cleanBonus, new Date().toISOString(), userId);
   }
 
   public recordLedgerTransaction(data: {
@@ -693,7 +816,7 @@ export class DatabaseService {
     return stmt.all() as DepositRow[];
   }
 
-  public approveDeposit(adminId: string, depositId: string): { deposit: DepositRow; entry: LedgerRow; wallet: WalletRow } {
+  public approveDeposit(adminId: string, depositId: string): { deposit: DepositRow; entry: LedgerRow; wallet: WalletRow; promotionalBonus?: PromotionalReward | null } {
     return this.transaction(() => {
       const deposit = this.getDepositRequest(depositId);
       if (!deposit) throw new Error('Deposit request not found');
@@ -712,7 +835,7 @@ export class DatabaseService {
       }
 
       // Credit wallet and record ledger entry
-      const { entry, wallet } = this.recordLedgerTransaction({
+      const { entry } = this.recordLedgerTransaction({
         userId: deposit.user_id,
         username: deposit.username,
         type: 'DEPOSIT',
@@ -721,15 +844,35 @@ export class DatabaseService {
         referenceId: deposit.reference_id || `dep_appr_${depositId}`
       });
 
+      // Promotional Rewards V2: First Deposit Bonus evaluation and issuance
+      let promotionalBonus: PromotionalReward | null = null;
+      try {
+        promotionalBonus = this.rewardService.issueFirstDepositBonus(
+          deposit.user_id,
+          deposit.username,
+          deposit.id,
+          deposit.amount
+        );
+      } catch (rewardErr) {
+        console.warn(`[DatabaseService] Promotional bonus issuance warning for deposit ${depositId}:`, rewardErr);
+      }
+
       this.recordAuditLog({
         adminUserId: adminId,
         action: 'APPROVE_DEPOSIT',
         targetUserId: deposit.user_id,
         targetRecordId: depositId,
-        metadata: { amount: deposit.amount, paymentMethod: deposit.payment_method, referenceId: deposit.reference_id }
+        metadata: {
+          amount: deposit.amount,
+          paymentMethod: deposit.payment_method,
+          referenceId: deposit.reference_id,
+          promotionalBonusAwarded: Boolean(promotionalBonus),
+          promotionalBonusAmount: promotionalBonus?.bonusAmount || 0
+        }
       });
 
-      return { deposit: this.getDepositRequest(depositId)!, entry, wallet };
+      const updatedWallet = this.getWallet(deposit.user_id)!;
+      return { deposit: this.getDepositRequest(depositId)!, entry, wallet: updatedWallet, promotionalBonus };
     });
   }
 
@@ -792,6 +935,25 @@ export class DatabaseService {
         ) VALUES (?, ?, ?, ?, ?, 'PENDING', ?)
       `);
       stmt.run(id, userId, username, cleanAmount, address, now);
+
+      const wallet = this.getWallet(userId)!;
+      const entryId = `tx_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      this.db.prepare(`
+        INSERT INTO ledger_transactions (
+          id, user_id, username, type, amount, balance_before, balance_after,
+          reference_id, description, created_at
+        ) VALUES (?, ?, ?, 'ESCROW_HOLD', ?, ?, ?, ?, ?, ?)
+      `).run(
+        entryId,
+        userId,
+        username,
+        cleanAmount,
+        wallet.balance + cleanAmount,
+        wallet.balance,
+        `wth_hold_${id}`,
+        `Withdrawal escrow hold of ${cleanAmount.toFixed(2)} ETB to ${address} pending approval`,
+        now
+      );
 
       return this.getWithdrawalRequest(id)!;
     });
@@ -925,6 +1087,25 @@ export class DatabaseService {
         throw new Error('Integrity error: reserved balance mismatch');
       }
 
+      const wallet = this.getWallet(withdrawal.user_id)!;
+      const entryId = `tx_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      this.db.prepare(`
+        INSERT INTO ledger_transactions (
+          id, user_id, username, type, amount, balance_before, balance_after,
+          reference_id, description, created_at
+        ) VALUES (?, ?, ?, 'REFUND', ?, ?, ?, ?, ?, ?)
+      `).run(
+        entryId,
+        withdrawal.user_id,
+        withdrawal.username,
+        cleanAmount,
+        wallet.balance - cleanAmount,
+        wallet.balance,
+        `wth_ref_${withdrawalId}`,
+        `Withdrawal rejected and refunded to wallet: ${reason || 'Rejected by administrator'}`,
+        now
+      );
+
       this.recordAuditLog({
         adminUserId: adminId,
         action: 'REJECT_WITHDRAWAL',
@@ -1036,6 +1217,25 @@ export class DatabaseService {
   public getPlayerTicket(ticketId: string): TicketRow | undefined {
     const stmt = this.db.prepare('SELECT * FROM player_tickets WHERE id = ?');
     return stmt.get(ticketId) as TicketRow | undefined;
+  }
+
+  public getActiveOrLobbyGames(roomId?: string): GameRow[] {
+    if (roomId) {
+      const stmt = this.db.prepare("SELECT * FROM games WHERE room_id = ? AND status IN ('lobby', 'active')");
+      return stmt.all(roomId) as GameRow[];
+    }
+    const stmt = this.db.prepare("SELECT * FROM games WHERE status IN ('lobby', 'active')");
+    return stmt.all() as GameRow[];
+  }
+
+  public getTicketsForGame(gameId: string): TicketRow[] {
+    const stmt = this.db.prepare('SELECT * FROM player_tickets WHERE game_id = ?');
+    return stmt.all(gameId) as TicketRow[];
+  }
+
+  public getLedgerTransactionByReference(referenceId: string): LedgerRow | undefined {
+    const stmt = this.db.prepare('SELECT * FROM ledger_transactions WHERE reference_id = ?');
+    return stmt.get(referenceId) as LedgerRow | undefined;
   }
 
   // ==================== BINGO CLAIMS (IDEMPOTENT) ====================
@@ -1178,18 +1378,15 @@ export class DatabaseService {
     const now = new Date().toISOString();
     const metaJson = log.metadata ? JSON.stringify(log.metadata) : null;
 
-    // Ensure system user exists if audit log is created by automated system
-    if (log.adminUserId === 'system') {
-      const sysUser = this.getUserById('system');
-      if (!sysUser) {
-        this.createUser({
-          id: 'system',
-          telegram_id: '000000000',
-          username: 'System',
-          referral_code: 'SYS00000',
-          role: 'ADMIN'
-        });
-      }
+    // Ensure admin or system user exists in users table to satisfy foreign key constraint
+    if (!this.getUserById(log.adminUserId)) {
+      this.createUser({
+        id: log.adminUserId,
+        telegram_id: `admin_${log.adminUserId}`,
+        username: log.adminUserId === 'system' ? 'System' : `Admin_${log.adminUserId}`,
+        referral_code: `ADM_${log.adminUserId.replace(/[^A-Za-z0-9]/g, '').slice(0, 5).toUpperCase() || 'SYS01'}`,
+        role: 'ADMIN'
+      });
     }
 
     const stmt = this.db.prepare(`
@@ -1443,17 +1640,39 @@ export class DatabaseService {
         throw new Error(`Card(s) already taken: ${takenList}`);
       }
 
-      // 3. Atomically debit wallet balance and record ledger entry
+      // 3. Atomically consume bonus balance first, then cash balance
       const now = new Date().toISOString();
       const cardListStr = cardNumbers.map(n => `#${n}`).join(', ');
-      const { wallet: updatedWallet } = this.recordLedgerTransaction({
+      const splitResult = this.rewardService.consumeBonusForPurchase(
+        userId,
+        totalCost,
+        'DAILY_GRAND_JACKPOT_CARD',
+        roundId
+      );
+
+      const wallet = this.getWallet(userId)!;
+      const entryId = `tx_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+      let splitDesc = `Daily Grand Jackpot: Card(s) ${cardListStr} (${cardNumbers.length} @ 999 ETB)`;
+      if (splitResult.bonusPaid > 0) {
+        splitDesc += ` [Paid: ${splitResult.bonusPaid.toFixed(2)} Bonus + ${splitResult.cashPaid.toFixed(2)} Cash]`;
+      }
+
+      this.db.prepare(`
+        INSERT INTO ledger_transactions (
+          id, user_id, username, type, amount, balance_before, balance_after,
+          game_id, description, created_at
+        ) VALUES (?, ?, ?, 'BET', ?, ?, ?, ?, ?, ?)
+      `).run(
+        entryId,
         userId,
         username,
-        type: 'BET',
-        amount: totalCost,
-        gameId: roundId,
-        description: `Daily Grand Jackpot: Card(s) ${cardListStr} (${cardNumbers.length} @ 999 ETB)`
-      });
+        totalCost,
+        wallet.balance + splitResult.cashPaid,
+        wallet.balance,
+        roundId,
+        splitDesc,
+        now
+      );
 
       // 4. Insert each ticket
       const createdTickets: DailyJackpotTicketRow[] = [];
@@ -1514,7 +1733,9 @@ export class DatabaseService {
       return {
         success: true,
         tickets: createdTickets,
-        newBalance: updatedWallet.balance
+        newBalance: wallet.balance,
+        newBonusBalance: wallet.bonus_balance,
+        totalPlayableBalance: Number((wallet.balance + wallet.bonus_balance).toFixed(2))
       };
     });
   }
@@ -1607,6 +1828,7 @@ export class DatabaseService {
    */
   public resetDatabase(): void {
     this.db.exec(`
+      DELETE FROM promotional_rewards;
       DELETE FROM daily_jackpot_tickets;
       DELETE FROM daily_jackpot_rounds;
       DELETE FROM pending_registrations;

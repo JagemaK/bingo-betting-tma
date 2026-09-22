@@ -87,10 +87,10 @@ describe('TelegramBot Contact Sharing Verification Suite', () => {
   });
 
   it('should correctly normalize various Ethiopian phone formats', () => {
-    expect(telegramBotService.normalizePhone('+251911223344')).toBe('0911223344');
-    expect(telegramBotService.normalizePhone('251911223344')).toBe('0911223344');
-    expect(telegramBotService.normalizePhone('0911223344')).toBe('0911223344');
-    expect(telegramBotService.normalizePhone('0711223344')).toBe('0711223344');
+    expect(telegramBotService.normalizePhone('+251911223344')).toBe('+251911223344');
+    expect(telegramBotService.normalizePhone('251911223344')).toBe('+251911223344');
+    expect(telegramBotService.normalizePhone('0911223344')).toBe('+251911223344');
+    expect(telegramBotService.normalizePhone('0711223344')).toBe('+251711223344');
   });
 
   it('should seamlessly verify and register user who directly shares contact without prior web form request', async () => {
@@ -118,7 +118,7 @@ describe('TelegramBot Contact Sharing Verification Suite', () => {
     // Confirm user is created in database with normalized phone
     const user = authService.getUserByTelegramId(String(tgUserId));
     expect(user).toBeDefined();
-    expect(user?.phone).toBe('0989342413');
+    expect(user?.phone).toBe('+251989342413');
   });
 });
 

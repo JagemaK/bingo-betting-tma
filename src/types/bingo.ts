@@ -95,6 +95,9 @@ export interface UserAccount {
   playerId: string;
   username: string;
   walletBalance: number;
+  reservedBalance?: number;
+  bonusBalance?: number;
+  totalPlayableBalance?: number;
   avatarUrl?: string;
   isBot?: boolean;
   phone?: string;
@@ -113,6 +116,25 @@ export interface UserAccount {
   levelTotalXp?: number;
   levelPercent?: number;
   telegram_username?: string;
+}
+
+export interface PromotionalReward {
+  id: string;
+  userId: string;
+  rewardType: 'FIRST_DEPOSIT_BONUS';
+  source: string;
+  qualifyingDepositId: string;
+  depositAmount: number;
+  bonusPercentage: number;
+  bonusAmount: number;
+  remainingAmount: number;
+  status: 'AWARDED' | 'PARTIALLY_CONSUMED' | 'CONSUMED' | 'EXPIRED';
+  issuedAt: string;
+  expiresAt: string;
+  consumedAt?: string;
+  expiredAt?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface UserProfile extends UserAccount {
@@ -258,6 +280,14 @@ export interface DailyJackpotPublicState {
     cardNumber: number;
     amount: number;
   } | null;
+}
+
+export interface DailyJackpotCardCatalogItem {
+  cardNumber: number;
+  isTaken: boolean;
+  isOwnedByMe: boolean;
+  price: number;
+  grid?: BingoGrid;
 }
 
 export interface DailyJackpotAdminRound {

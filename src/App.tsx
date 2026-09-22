@@ -44,6 +44,7 @@ import { AuthModal, AuthModalMode } from './components/AuthModal.js';
 import { UserProfileDrawer } from './components/UserProfileDrawer.js';
 import { AdminDashboardModal } from './components/AdminDashboardModal.js';
 import { DailyJackpotModal } from './components/DailyJackpotModal.js';
+import { DailyJackpotEntryView } from './components/DailyJackpotEntryView.js';
 import { soundService } from './services/soundService.js';
 import { telegramSdk } from './services/telegramSdk.js';
 import { useAuth } from './services/authContext.js';
@@ -51,7 +52,7 @@ import { useAuth } from './services/authContext.js';
 export default function App() {
   const auth = useAuth();
   const [socket, setSocket] = useState<Socket | null>(null);
-  const [currentView, setCurrentView] = useState<'lobby' | 'card_selection' | 'live_game'>('lobby');
+  const [currentView, setCurrentView] = useState<'lobby' | 'card_selection' | 'live_game' | 'daily_jackpot'>('lobby');
   const [activeRoomId, setActiveRoomId] = useState<string | null>(null);
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
   const [currency, setCurrency] = useState<CurrencyType>('ETB');
@@ -722,7 +723,7 @@ export default function App() {
           currency={currency}
           onSelectCurrency={setCurrency}
           onJoinRoom={handleJoinRoom}
-          onOpenDailyJackpot={() => setActiveModal('daily_jackpot')}
+          onOpenDailyJackpot={() => setCurrentView('daily_jackpot')}
           dailyJackpotState={dailyJackpotState}
           onOpenWallet={handleOpenDeposit}
           onOpenLeaderboard={() => setActiveModal('leaderboard')}
@@ -988,6 +989,29 @@ export default function App() {
             )}
           </footer>
         </div>
+      )}
+
+      {/* 4. View: Dedicated Full-Screen Daily Grand Jackpot Entry */}
+      {currentView === 'daily_jackpot' && (
+        <DailyJackpotEntryView
+          user={user}
+          token={auth.sessionToken || localStorage.getItem('bingo_auth_token') || ''}
+          dailyJackpotState={dailyJackpotState}
+          onBack={() => setCurrentView('lobby')}
+          onOpenDeposit={handleOpenDeposit}
+          onOpenSignUp={() => handleOpenSignUp('register')}
+          onOpenAdmin={() => setActiveModal('admin')}
+          onUpdateUser={(updatedUser) => {
+            setUser(updatedUser);
+            auth.updateUser(updatedUser);
+          }}
+          onTicketPurchased={() => {
+            fetch(apiUrl('/api/daily-jackpot/current'))
+              .then(r => r.json())
+              .then(d => { if (d.success !== false) setDailyJackpotState(d); })
+              .catch(() => {});
+          }}
+        />
       )}
 
       {/* Modals Container */}

@@ -237,6 +237,51 @@ export function generateServerSeed(): string {
   return crypto.randomBytes(32).toString('hex');
 }
 
+/**
+ * Computes a cryptographic SHA-256 commitment of the server seed
+ * Committed before player card selection and revealed at game completion.
+ */
+export function computeServerSeedCommitment(serverSeed: string): string {
+  return crypto.createHash('sha256').update(serverSeed).digest('hex');
+}
+
+/**
+ * Cryptographically verifiable provably-fair ball sequence derivation.
+ *
+ * Design:
+ * - serverSeed: 256-bit cryptographically secure server entropy, committed via SHA-256 BEFORE bets are placed
+ * - clientSeed: Client-supplied or room entropy seed (e.g. gameId / block / client hash)
+ * - roundNonce: Nonce / round counter
+ * - PRF: HMAC-SHA256 with serverSeed as key
+ * - Permutation: Fisher-Yates shuffle derived deterministically from HMAC stream
+ *
+ * Properties:
+ * - Deterministic: same (serverSeed, clientSeed, nonce) -> identical 75-ball permutation
+ * - High entropy: different clientSeed -> completely different permutation
+ * - Complete: Exactly 75 balls (1..75) with zero duplicates
+ * - Independently verifiable: players can re-run this function after game completion once serverSeed is revealed
+ */
+export function deriveDeterministicBallSequence(
+  serverSeed: string,
+  clientSeed: string = 'bingo_default_client_seed',
+  nonce: number | string = 0
+): number[] {
+  const balls = Array.from({ length: 75 }, (_, i) => i + 1);
+
+  for (let i = balls.length - 1; i > 0; i--) {
+    const hmac = crypto.createHmac('sha256', serverSeed);
+    hmac.update(`${clientSeed}:${nonce}:${i}`);
+    const hash = hmac.digest();
+    const randUInt = hash.readUInt32BE(0);
+    const j = randUInt % (i + 1);
+    const temp = balls[i];
+    balls[i] = balls[j];
+    balls[j] = temp;
+  }
+
+  return balls;
+}
+
 export function computeCommitmentHash(balls: number[], serverSeed: string): string {
   return crypto
     .createHash('sha256')

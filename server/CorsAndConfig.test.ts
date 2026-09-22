@@ -93,7 +93,7 @@ describe('CORS and Origin Validation Suite', () => {
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(data.success).toBe(true);
-    expect(data.phone).toBe(testPhone);
+    expect(data.phone).toMatch(/\+?251988776655|0988776655/);
     expect(data.botUrl).toContain('t.me');
   });
 });

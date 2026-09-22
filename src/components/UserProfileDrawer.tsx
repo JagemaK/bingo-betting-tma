@@ -320,9 +320,38 @@ export const UserProfileDrawer: React.FC<UserProfileDrawerProps> = ({
                 </span>
               </div>
 
-              <div className="font-arcade font-black text-3xl text-[#E8FF00] drop-shadow-[0_0_12px_rgba(232,255,0,0.3)]">
-                {formatBalance()} BIRR
-              </div>
+              {(() => {
+                const cashBal = profileData?.walletBalance ?? user?.walletBalance ?? 0;
+                const bonusBal = profileData?.bonusBalance ?? user?.bonusBalance ?? 0;
+                if (bonusBal > 0) {
+                  return (
+                    <div className="space-y-1.5">
+                      <div className="flex items-baseline justify-between">
+                        <div>
+                          <div className="font-arcade font-black text-2xl text-[#E8FF00] drop-shadow-[0_0_12px_rgba(232,255,0,0.3)]">
+                            {cashBal.toFixed(2)} BIRR
+                          </div>
+                          <div className="text-[9px] font-arcade text-white/50 tracking-wider">CASH (WITHDRAWABLE)</div>
+                        </div>
+                        <div className="text-right">
+                          <div className="font-arcade font-bold text-base text-amber-300">
+                            +{bonusBal.toFixed(2)} BIRR
+                          </div>
+                          <div className="text-[9px] font-arcade text-amber-400/80 tracking-wider">PROMO (BINGO ONLY)</div>
+                        </div>
+                      </div>
+                      <div className="text-[10px] text-white/40 font-mono">
+                        Total Playable: <span className="text-white font-bold">{(cashBal + bonusBal).toFixed(2)} BIRR</span>
+                      </div>
+                    </div>
+                  );
+                }
+                return (
+                  <div className="font-arcade font-black text-3xl text-[#E8FF00] drop-shadow-[0_0_12px_rgba(232,255,0,0.3)]">
+                    {formatBalance()} BIRR
+                  </div>
+                );
+              })()}
 
               <div className="grid grid-cols-2 gap-2 pt-1">
                 <button

@@ -4,11 +4,13 @@ import {
   ArrowRight,
   Flame,
   Zap,
-  Gift,
   Users,
   Play,
   RotateCw,
   Trophy,
+  AlertCircle,
+  CheckCircle2,
+  Ticket,
 } from 'lucide-react';
 import { RoomSummary, CurrencyType, UserAccount, DailyJackpotPublicState } from '../types/bingo.js';
 import { soundService } from '../services/soundService.js';
@@ -65,6 +67,73 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
   // Find featured or highest pool room for hero
   const highestRoom = [...rooms].sort((a, b) => (b.totalPot || 0) - (a.totalPot || 0))[0] || rooms[0];
 
+  // Daily Grand Jackpot stats & state helpers (Displays 150,000 BIRR minimum as required)
+  const jackpotAmount = (dailyJackpotState?.jackpotAmount && dailyJackpotState.jackpotAmount > 150000) ? dailyJackpotState.jackpotAmount : 150000;
+  const cardsSold = dailyJackpotState?.cardsSold || 0;
+  const maxCards = dailyJackpotState?.maxCards || 200;
+  const minCards = dailyJackpotState?.minCards || 100;
+  const progressPercent = Math.min(100, Math.max(0, Math.round((cardsSold / maxCards) * 100)));
+  const userTicketsCount = dailyJackpotState?.myTickets?.length || 0;
+  const isPostponed = Boolean(dailyJackpotState?.isPostponed || dailyJackpotState?.status === 'POSTPONED');
+  const jackpotStatus = dailyJackpotState?.status || (isPostponed ? 'POSTPONED' : 'REGISTRATION_OPEN');
+
+  const renderJackpotStatusBadge = () => {
+    if (isPostponed || jackpotStatus === 'POSTPONED') {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 text-[10px] sm:text-xs font-arcade font-bold tracking-wide shrink-0">
+          <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+          <span>POSTPONED · NEXT DRAW 12:00 PM</span>
+        </span>
+      );
+    }
+    if (jackpotStatus === 'REGISTRATION_OPEN') {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] sm:text-xs font-arcade font-bold tracking-wide shrink-0">
+          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+          <span>REGISTRATION OPEN</span>
+        </span>
+      );
+    }
+    if (jackpotStatus === 'REGISTRATION_CLOSED' || jackpotStatus === 'CHECKING_ELIGIBILITY') {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] sm:text-xs font-arcade font-bold tracking-wide shrink-0">
+          <Clock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+          <span>REGISTRATION CLOSED</span>
+        </span>
+      );
+    }
+    if (jackpotStatus === 'GAME_RUNNING' || jackpotStatus === 'JACKPOT_READY') {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30 text-[10px] sm:text-xs font-arcade font-bold tracking-wide shrink-0 animate-pulse">
+          <Flame className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+          <span>GAME RUNNING</span>
+        </span>
+      );
+    }
+    if (jackpotStatus === 'WINNER_FOUND' || jackpotStatus === 'JACKPOT_PAID') {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-400/25 text-amber-200 border border-amber-400/40 text-[10px] sm:text-xs font-arcade font-bold tracking-wide shrink-0">
+          <Trophy className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+          <span>WINNER ANNOUNCED</span>
+        </span>
+      );
+    }
+    if (jackpotStatus === 'COMPLETED') {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/10 text-white/80 border border-white/20 text-[10px] sm:text-xs font-arcade font-bold tracking-wide shrink-0">
+          <CheckCircle2 className="w-3.5 h-3.5 text-white/70 shrink-0" />
+          <span>ROUND COMPLETED</span>
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] sm:text-xs font-arcade font-bold tracking-wide shrink-0">
+        <Trophy className="w-3.5 h-3.5 text-amber-300 fill-current shrink-0" />
+        <span>DAILY DRAW · 12:00 PM</span>
+      </span>
+    );
+  };
+
   // Filtering rooms
   const filteredRooms = rooms.filter((r) => {
     if (activeFilter === 'low') return r.etbEquivalent <= 20;
@@ -102,53 +171,84 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
       />
 
       {/* Main Content Area */}
-      <main className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-24 space-y-6 flex-1 relative z-10">
+      <main className="w-full max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 pt-2.5 sm:pt-4 pb-24 space-y-3 sm:space-y-4 flex-1 relative z-10">
         {/* ══════════════════════════════════════════════════ */}
-        {/* HERO ARCADE BANNER: DAILY GRAND JACKPOT (12:00 PM) */}
+        {/* COMPACT EVENT BANNER: DAILY GRAND JACKPOT (12:00 PM) */}
         {/* ══════════════════════════════════════════════════ */}
         <section 
-          className="relative rounded-3xl p-5 md:p-7 overflow-hidden border border-amber-500/40 bg-gradient-to-br from-[#1a1303] via-[#111111] to-[#0d0d0d] shadow-[0_0_30px_rgba(245,158,11,0.2)] flex flex-col md:flex-row md:items-center md:justify-between gap-6"
+          className="relative rounded-2xl sm:rounded-3xl p-3.5 sm:p-4 md:p-5 overflow-hidden border border-amber-500/35 bg-gradient-to-br from-[#1a1303] via-[#111111] to-[#0c0c0c] shadow-[0_0_25px_rgba(245,158,11,0.18)] flex flex-col gap-2.5 sm:gap-3 w-full"
           aria-label="Daily Grand Jackpot"
         >
-          {/* Neon accent corner lines */}
-          <div className="absolute top-0 right-0 w-32 h-32 bg-amber-500/[0.08] rounded-bl-full pointer-events-none" />
-          <div className="absolute top-3 right-3 flex items-center gap-1.5">
-            {dailyJackpotState?.isPostponed ? (
-              <span className="text-[10px] font-arcade font-black py-1 px-2.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 whitespace-nowrap">
-                ⚠️ POSTPONED (NEXT: 12:00 PM)
-              </span>
-            ) : (
-              <span className="badge-neon text-[10px] py-1 px-2.5 whitespace-nowrap bg-amber-500/20 text-amber-300 border-amber-500/30">
-                <Trophy className="w-3.5 h-3.5 text-amber-300 fill-current" />
-                DAILY DRAW
-              </span>
-            )}
-            <span className="text-[10px] font-arcade font-bold py-1 px-2.5 rounded-full bg-black/60 text-white/80 border border-white/10 whitespace-nowrap">
-              {dailyJackpotState?.cardsSold || 0}/200 CARDS SOLD
-            </span>
+          {/* Subtle ambient glows (pointer-events-none, strictly behind content) */}
+          <div className="absolute -top-10 -right-10 w-36 h-36 bg-amber-500/[0.07] rounded-full blur-2xl pointer-events-none -z-0" />
+          <div className="absolute -bottom-8 -left-8 w-28 h-28 bg-yellow-500/[0.04] rounded-full blur-2xl pointer-events-none -z-0" />
+
+          {/* 1. TOP META BAR: Clean horizontal flow with wrap, NO collision or absolute positioning */}
+          <div className="relative z-10 flex flex-wrap items-center justify-between gap-1.5 sm:gap-2 w-full">
+            <div className="inline-flex items-center gap-1.5 text-[10px] sm:text-xs font-arcade font-black text-amber-400 uppercase tracking-wider">
+              <Zap className="w-3.5 h-3.5 text-amber-400 fill-current shrink-0" />
+              <span>OFFICIAL 12:00 PM DRAW</span>
+            </div>
+            
+            {/* Status Badge in natural flow */}
+            {renderJackpotStatusBadge()}
           </div>
 
-          <div className="space-y-1.5 max-w-xl">
-            <div className="text-[10px] sm:text-xs font-arcade font-black text-amber-400 uppercase tracking-widest flex items-center gap-1.5 whitespace-nowrap">
-              <Zap className="w-3.5 h-3.5 text-amber-400 fill-current" />
-              <span>⚡ OFFICIAL 12:00 PM ETHIOPIA DRAW</span>
+          {/* 2. TITLE & GUARANTEED PRIZE ROW: Responsive side-by-side or stacked without collision */}
+          <div className="relative z-10 flex flex-col sm:flex-row sm:items-baseline justify-between gap-1 sm:gap-3">
+            <div className="min-w-0">
+              <h2 className="font-arcade text-lg sm:text-xl md:text-2xl font-black text-white tracking-tight uppercase leading-tight">
+                DAILY GRAND JACKPOT
+              </h2>
+
+              {/* User Participation Pill (if user has active cards) */}
+              {userTicketsCount > 0 && (
+                <div className="pt-0.5">
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-arcade font-bold">
+                    <Ticket className="w-3 h-3 shrink-0" />
+                    <span>YOU'RE IN — {userTicketsCount} CARD{userTicketsCount > 1 ? 'S' : ''}</span>
+                  </span>
+                </div>
+              )}
             </div>
-            <h2 className="font-arcade text-2xl sm:text-3xl lg:text-4xl font-black text-white tracking-tight uppercase leading-none">
-              DAILY GRAND JACKPOT
-            </h2>
-            <div className="pt-1.5">
-              <span className="text-xs font-arcade font-bold text-white/50 uppercase block">
-                Guaranteed Winner Pool
-              </span>
-              <span className="font-arcade text-3xl sm:text-4xl lg:text-5xl font-black text-amber-300 tracking-tight drop-shadow-[0_0_16px_rgba(245,158,11,0.5)] whitespace-nowrap">
-                {(dailyJackpotState?.jackpotAmount || 100000).toLocaleString()} BIRR
-              </span>
+
+            <div className="font-arcade text-2xl sm:text-3xl font-black text-amber-300 tracking-tight drop-shadow-[0_0_14px_rgba(245,158,11,0.5)] leading-none shrink-0">
+              {jackpotAmount.toLocaleString()} BIRR
             </div>
           </div>
 
-          <div className="pt-3 md:pt-0 border-t md:border-t-0 md:border-l border-white/10 md:pl-6 flex flex-col sm:flex-row md:flex-col items-start sm:items-center md:items-end justify-between gap-3 flex-shrink-0">
-            <div className="flex items-center gap-1.5 text-xs text-white/70 font-arcade whitespace-nowrap">
-              <Clock className="w-4 h-4 text-amber-400" />
+          {/* 3. CARDS SOLD PROGRESS METER: Streamlined compact container */}
+          <div className="relative z-10 p-2 sm:p-2.5 rounded-xl bg-black/40 border border-white/[0.08] space-y-1.5">
+            <div className="flex items-center justify-between text-xs font-arcade font-bold">
+              <div className="flex items-center gap-1.5 text-white/70 text-[10px] sm:text-xs">
+                <Users className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <span>CARDS SOLD</span>
+              </div>
+              <span className="text-white font-black text-xs sm:text-sm">
+                {cardsSold} / {maxCards}
+              </span>
+            </div>
+
+            {/* Progress Bar */}
+            <div className="w-full bg-white/10 h-1.5 sm:h-2 rounded-full overflow-hidden">
+              <div 
+                className="h-full bg-gradient-to-r from-amber-500 to-yellow-300 rounded-full transition-all duration-500"
+                style={{ width: `${progressPercent}%` }}
+              />
+            </div>
+
+            {/* Min to Draw / Price / Max indicators */}
+            <div className="flex items-center justify-between text-[9px] sm:text-[10px] font-arcade text-white/40">
+              <span>Min to Draw: {minCards}</span>
+              <span className="text-amber-300/80 font-bold">999 Birr / Card</span>
+              <span>Max: {maxCards}</span>
+            </div>
+          </div>
+
+          {/* 4. FOOTER: NEXT DRAW INFO & CTA BUTTON */}
+          <div className="relative z-10 flex flex-col xs:flex-row items-stretch xs:items-center justify-between gap-2 pt-0.5">
+            <div className="flex items-center gap-1.5 text-[10px] sm:text-xs text-white/70 font-arcade shrink-0">
+              <Clock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
               <span>Next Draw: <strong className="text-white">Daily 12:00 PM</strong></span>
             </div>
 
@@ -162,43 +262,11 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
                   onJoinRoom(highestRoom.roomId);
                 }
               }}
-              className="btn-neon text-sm py-3 px-6 rounded-2xl flex items-center gap-2 shadow-lg whitespace-nowrap cursor-pointer bg-gradient-to-r from-amber-400 to-yellow-300 text-black border-amber-300 shadow-[0_0_20px_rgba(245,158,11,0.4)]"
+              className="btn-neon text-xs sm:text-sm py-2 px-3.5 sm:px-4 rounded-xl flex items-center justify-center gap-1.5 shadow-md cursor-pointer bg-gradient-to-r from-amber-400 to-yellow-300 text-black font-arcade font-black border-amber-300 shadow-[0_0_15px_rgba(245,158,11,0.3)] hover:scale-[1.02] active:scale-[0.98] transition-transform w-full xs:w-auto shrink-0"
             >
-              <Trophy className="w-4 h-4 fill-current text-black" />
+              <Trophy className="w-3.5 h-3.5 fill-current text-black shrink-0" />
               <span>ENTER JACKPOT →</span>
             </button>
-          </div>
-        </section>
-
-        {/* ══════════════════════════════════════════════════ */}
-        {/* DAILY REWARDS & STREAK QUICK ENTRY CARD            */}
-        {/* ══════════════════════════════════════════════════ */}
-        <section 
-          onClick={onOpenReferral}
-          className="rounded-2xl p-3.5 bg-[#141414] border border-white/10 hover:border-[#E8FF00]/40 transition-all cursor-pointer flex items-center justify-between gap-3 shadow-[0_4px_16px_rgba(0,0,0,0.6)] group"
-          aria-label="Daily Streak and Rewards"
-        >
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="w-11 h-11 rounded-xl bg-[#1c1c1c] border border-white/10 flex items-center justify-center flex-shrink-0 group-hover:border-[#E8FF00]/60 transition-colors">
-              <Gift className="w-6 h-6 text-[#E8FF00]" />
-            </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5">
-                <span className="font-arcade text-xs font-black uppercase text-white tracking-wider whitespace-nowrap">
-                  DAILY STREAK BONUS
-                </span>
-                <span className="text-[9px] font-arcade font-bold px-1.5 py-0.5 rounded-full bg-[#E8FF00]/15 text-[#E8FF00] border border-[#E8FF00]/30 whitespace-nowrap">
-                  DAY 3/7
-                </span>
-              </div>
-              <p className="text-[11px] text-white/50 truncate mt-0.5">
-                Claim up to <strong className="text-[#E8FF00]">500 Birr</strong> + 5% referral commission
-              </p>
-            </div>
-          </div>
-
-          <div className="btn-dark-arcade text-xs py-1.5 px-3 rounded-xl flex-shrink-0 group-hover:bg-[#202020] whitespace-nowrap">
-            CLAIM →
           </div>
         </section>
 
@@ -261,7 +329,7 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
           {filteredRooms.map((room) => {
             const isActive = room.status === 'lobby';
             const isDrawing = room.status === 'active';
-            const timerFmt = `0:${room.lobbyTimeRemaining.toString().padStart(2, '0')}`;
+            const timerFmt = `0:${(room.lobbyTimeRemaining ?? 0).toString().padStart(2, '0')}`;
             const possibleWin = (isActive || isDrawing)
               ? formatCurrency(room.winnerPayoutAmount || room.playerPayoutPool || (room.totalPot > 0 ? room.totalPot * 0.8 : room.betPerCard * 8))
               : '-';

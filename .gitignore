@@ -47,6 +47,7 @@ Thumbs.db
 *.tsbuildinfo
 vite.config.ts.timestamp-*
 .eslintcache
+scratch/
 
 # Database files
 *.db

@@ -227,6 +227,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     initAuth();
+
+    // In Telegram Web / mobile iframe, initData is sometimes populated asynchronously right after mount
+    if (typeof window !== 'undefined' && window.Telegram && !telegramSdk.getInitData()) {
+      const timer1 = setTimeout(() => {
+        if (telegramSdk.getInitData()) {
+          console.log('[AuthContext] Delayed initData detected, re-running initAuth');
+          initAuth();
+        }
+      }, 300);
+      const timer2 = setTimeout(() => {
+        if (telegramSdk.getInitData()) {
+          console.log('[AuthContext] Delayed initData detected (tick 2), re-running initAuth');
+          initAuth();
+        }
+      }, 800);
+      return () => {
+        clearTimeout(timer1);
+        clearTimeout(timer2);
+      };
+    }
   }, [initAuth]);
 
   return (

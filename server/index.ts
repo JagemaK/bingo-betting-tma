@@ -11,6 +11,8 @@ import { telegramBotService } from './TelegramBotService.js';
 import { computeCommitmentHash } from './BingoEngine.js';
 import { databaseService } from './DatabaseService.js';
 import { dailyJackpotService } from './DailyJackpotService.js';
+import { hashPassword, verifyPassword } from './PasswordUtils.js';
+import { formatLocalPhone, isValidEthiopianPhone } from './PhoneUtils.js';
 
 // Synchronously load .env if present
 try {
@@ -82,6 +84,14 @@ const corsOptions: cors.CorsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 
+// Verbose HTTP Request Logger for Dev & Telegram Mini App Auditing
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api') || req.path === '/' || req.path.endsWith('.html')) {
+    console.log(`[HTTP] ${req.method} ${req.path} - Origin: ${req.headers.origin || 'none'}`);
+  }
+  next();
+});
+
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: {
@@ -116,6 +126,9 @@ app.get('/api/health', (req, res) => {
 app.post('/api/telegram/webhook', async (req, res) => {
   try {
     const result = await telegramBotService.handleWebhookUpdate(req.body);
+    if (result && result.webhookResponse) {
+      return res.json(result.webhookResponse);
+    }
     res.json(result);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -212,11 +225,13 @@ app.post('/api/auth/register', async (req, res) => {
     ? authHeader.substring(7)
     : (req.body.tempToken || req.body.token);
 
-  const { username, referralCode, name, phone, password } = req.body;
+  const { username, referralCode, name, phone, phoneNumber, password } = req.body;
+  const targetPhone = phone || phoneNumber;
+  const targetName = name || username;
 
   // Telegram registration flow with tempToken
   if (tempToken) {
-    const chosenUsername = username || name;
+    const chosenUsername = targetName;
     const result = await authService.completeRegistration(tempToken, chosenUsername, referralCode);
     if (!result.success) {
       return res.status(400).json({ error: result.error });
@@ -224,8 +239,12 @@ app.post('/api/auth/register', async (req, res) => {
     return res.json(result);
   }
 
-  // Fallback for legacy phone/password registration
-  const result = authService.register(name, phone, password);
+  if (!targetPhone || !password) {
+    return res.status(400).json({ error: 'Phone number and password are required.' });
+  }
+
+  // Authoritative direct phone/password registration
+  const result = authService.register(targetName || 'Player', targetPhone, password);
   if (!result.success) {
     return res.status(400).json({ error: result.error });
   }
@@ -248,7 +267,7 @@ app.get('/api/auth/session', (req, res) => {
 
 // Get currently authenticated user from token
 app.get('/api/auth/me', authenticateSession, (req: any, res) => {
-  res.json({ user: req.user });
+  res.json({ success: true, user: req.user });
 });
 
 // Invalidate & Revoke Session (Logout)
@@ -327,12 +346,51 @@ app.post('/api/auth/forgot-password-complete', (req, res) => {
 
 // 3. Login with Phone + Password
 app.post('/api/auth/login', (req, res) => {
-  const { phone, password } = req.body;
+  const phone = req.body.phone || req.body.phoneNumber;
+  const password = req.body.password;
+
+  if (!phone || !password) {
+    return res.status(400).json({ error: 'Phone number and password are required.' });
+  }
+
   const result = authService.login(phone, password);
   if (!result.success) {
-    return res.status(401).json({ error: result.error });
+    const status = result.error?.includes('suspended') ? 403 : result.error?.includes('Too many') ? 429 : 401;
+    return res.status(status).json({ error: result.error });
   }
   res.json(result);
+});
+
+// 3b. Change Password (Authenticated)
+app.post('/api/auth/change-password', authenticateSession, (req: any, res) => {
+  const { currentPassword, newPassword, confirmPassword } = req.body;
+  if (!currentPassword || !newPassword) {
+    return res.status(400).json({ error: 'Current password and new password are required.' });
+  }
+  if (newPassword.length < 6) {
+    return res.status(400).json({ error: 'New password must be at least 6 characters.' });
+  }
+  if (confirmPassword && newPassword !== confirmPassword) {
+    return res.status(400).json({ error: 'Passwords do not match.' });
+  }
+
+  const user = databaseService.getUserById(req.user.playerId || req.user.id);
+  if (!user) {
+    return res.status(404).json({ error: 'User not found.' });
+  }
+
+  const verify = verifyPassword(currentPassword, user.password_hash, user.password_salt);
+  if (!verify.isValid) {
+    return res.status(401).json({ error: 'Current password is incorrect.' });
+  }
+
+  const { hash, salt } = hashPassword(newPassword);
+  databaseService.updateUser(user.id, {
+    password_hash: hash,
+    password_salt: salt
+  });
+
+  res.json({ success: true, message: 'Password changed successfully.' });
 });
 
 // 4. Telegram 1-Tap Login (Restricted legacy fallback for local tests only)
@@ -552,7 +610,8 @@ app.post('/api/wallet/withdraw', authenticateSession, async (req: any, res) => {
       return res.status(400).json({ error: 'Telebirr account phone number is required' });
     }
     const normalizedPhone = authService.normalizePhone(rawAddress.trim());
-    if (!/^(09|07)\d{8}$/.test(normalizedPhone)) {
+    const localTelebirrPhone = formatLocalPhone(normalizedPhone) || normalizedPhone;
+    if (!/^(09|07)\d{8}$/.test(localTelebirrPhone)) {
       return res.status(400).json({
         error: 'Invalid Telebirr phone number. Must be a valid Ethiopian mobile number (09xxxxxxxx or 07xxxxxxxx)'
       });
@@ -564,7 +623,7 @@ app.post('/api/wallet/withdraw', authenticateSession, async (req: any, res) => {
       targetPlayerId,
       userObj?.username || req.user.username || 'Player',
       withdrawAmount,
-      normalizedPhone
+      localTelebirrPhone
     );
     res.json({
       success: true,
@@ -575,6 +634,20 @@ app.post('/api/wallet/withdraw', authenticateSession, async (req: any, res) => {
     });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
+  }
+});
+
+// Promotional Rewards System V2: Get active promotional bonus details for current user
+app.get('/api/rewards/my-bonus', optionalSession, (req: any, res) => {
+  const userId = req.user?.playerId || req.user?.id;
+  if (!userId) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  try {
+    const data = databaseService.rewardService.getUserActiveBonus(userId);
+    res.json({ success: true, ...data });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -811,19 +884,33 @@ app.post('/api/admin/deposits/:id/approve', requireAdmin, async (req: any, res) 
     const targetUserId = result.deposit.playerId;
     const wallet = databaseService.getOrCreateWallet(targetUserId);
 
+    let message = `Your deposit of ${result.deposit.amount} ETB has been approved!`;
+    if (result.promotionalBonus) {
+      message += ` You received a 10% First Deposit Bonus of ${result.promotionalBonus.bonusAmount.toFixed(2)} ETB (valid 24h for Bingo)!`;
+    }
+
     // Instant real-time push to Customer's active WebSocket room
     io.to(`user_${targetUserId}`).emit('WALLET_UPDATED', {
       playerId: targetUserId,
       balance: wallet.balance,
       reservedBalance: wallet.reserved_balance,
+      bonusBalance: wallet.bonus_balance || 0,
+      totalPlayableBalance: Number(((wallet.balance || 0) + (wallet.bonus_balance || 0)).toFixed(2)),
+      promotionalBonus: result.promotionalBonus || null,
       type: 'DEPOSIT',
       amount: result.deposit.amount,
       referenceId: result.deposit.referenceId,
       status: 'APPROVED',
-      message: `Your deposit of ${result.deposit.amount} ETB has been approved!`
+      message
     });
 
-    res.json({ success: true, ...result, request: result.deposit, wallet });
+    res.json({
+      success: true,
+      ...result,
+      request: result.deposit,
+      wallet,
+      promotionalBonus: result.promotionalBonus || null
+    });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
@@ -870,6 +957,8 @@ app.post('/api/admin/withdrawals/:id/approve', requireAdmin, async (req: any, re
       playerId: targetUserId,
       balance: wallet.balance,
       reservedBalance: wallet.reserved_balance,
+      bonusBalance: wallet.bonus_balance || 0,
+      totalPlayableBalance: Number(((wallet.balance || 0) + (wallet.bonus_balance || 0)).toFixed(2)),
       type: 'WITHDRAWAL',
       amount: result.withdrawal.amount,
       status: 'APPROVED',
@@ -983,6 +1072,17 @@ app.post('/api/admin/daily-jackpot/evaluate', requireAdmin, (req: any, res) => {
     res.json({ ...result });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
+  }
+});
+
+// 15. Promotional Rewards Admin Overview
+app.get('/api/admin/rewards', requireAdmin, (req, res) => {
+  try {
+    const status = req.query.status as string;
+    const rewards = databaseService.rewardService.listAllRewards(status);
+    res.json({ success: true, rewards });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -1261,10 +1361,17 @@ if (process.env.NODE_ENV !== 'test') {
   httpServer.listen(PORT, () => {
     console.log(`🎰 Bingo Multi-Room Server running at http://localhost:${PORT}`);
     if (process.env.TELEGRAM_BOT_TOKEN) {
-      telegramBotService.startPolling();
       const webAppUrl = process.env.TELEGRAM_WEBAPP_URL || process.env.WEBAPP_URL || process.env.FRONTEND_URL;
-      if (webAppUrl) {
-        telegramBotService.setMenuButton(webAppUrl);
+      if (webAppUrl && webAppUrl.startsWith('https://')) {
+        const cleanUrl = webAppUrl.replace(/\/+$/, '');
+        console.log(`[TelegramBot] Configuring webhook and menu button for: ${cleanUrl}`);
+        telegramBotService.setWebhook(`${cleanUrl}/api/telegram/webhook`);
+        telegramBotService.setMenuButton(cleanUrl);
+      } else {
+        telegramBotService.startPolling();
+        if (webAppUrl) {
+          telegramBotService.setMenuButton(webAppUrl);
+        }
       }
     }
   });

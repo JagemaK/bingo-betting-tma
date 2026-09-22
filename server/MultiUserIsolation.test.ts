@@ -468,6 +468,16 @@ describe('Multi-User Security & Player Isolation Test Suite (Requirements 17 & 1
 
   // TEST 16: Welcome bonus is strictly idempotent (Requirement 7)
   it('TEST 16: Welcome bonus is strictly idempotent with reference bonus_welcome_<userId>', async () => {
+    // Credit initial bonus
+    databaseService.recordLedgerTransaction({
+      userId: userA.playerId,
+      username: userA.username,
+      type: 'BONUS',
+      amount: 1000.0,
+      description: 'Initial Bonus Credit',
+      referenceId: `bonus_welcome_${userA.playerId}`
+    });
+
     const balanceBefore = databaseService.getOrCreateWallet(userA.playerId).balance;
 
     // Attempt to credit welcome bonus again with the same referenceId

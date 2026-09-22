@@ -13,7 +13,7 @@ import {
   Phone,
   Clock
 } from 'lucide-react';
-import { UserAccount, LedgerEntry } from '../types/bingo.js';
+import { UserAccount, LedgerEntry, PromotionalReward } from '../types/bingo.js';
 import { soundService } from '../services/soundService.js';
 import { telegramSdk } from '../services/telegramSdk.js';
 import { apiUrl } from '../config/api.js';
@@ -45,14 +45,62 @@ export const WalletModal: React.FC<WalletModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [activeBonusData, setActiveBonusData] = useState<{
+    bonusBalance: number;
+    cashBalance: number;
+    totalPlayableBalance: number;
+    activeReward: PromotionalReward | null;
+    timeRemainingSeconds: number;
+  } | null>(null);
+
+  const fetchBonus = async () => {
+    try {
+      const token = localStorage.getItem('bingo_auth_token');
+      const authHeaders: Record<string, string> = {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      };
+      const res = await fetch(apiUrl('/api/rewards/my-bonus'), { headers: authHeaders });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) {
+          setActiveBonusData(data);
+        }
+      }
+    } catch (e) {
+      // Non-blocking
+    }
+  };
 
   useEffect(() => {
     if (isOpen) {
       if (initialTab) setActiveTab(initialTab);
-      if (user?.playerId) fetchLedger();
+      if (user?.playerId) {
+        fetchLedger();
+        fetchBonus();
+      }
       if (user?.phone) setWithdrawAddress(user.phone);
     }
-  }, [isOpen, initialTab, user?.playerId, user?.phone, user?.walletBalance]);
+  }, [isOpen, initialTab, user?.playerId, user?.phone, user?.walletBalance, user?.bonusBalance]);
+
+  useEffect(() => {
+    if (!activeBonusData || activeBonusData.timeRemainingSeconds <= 0) return;
+    const interval = setInterval(() => {
+      setActiveBonusData(prev => {
+        if (!prev || prev.timeRemainingSeconds <= 0) return prev;
+        return { ...prev, timeRemainingSeconds: prev.timeRemainingSeconds - 1 };
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [activeBonusData?.timeRemainingSeconds]);
+
+  const formatCountdown = (seconds: number) => {
+    if (seconds <= 0) return 'Expired';
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    return `${h}h ${m}m ${s}s`;
+  };
 
   if (!isOpen) return null;
 
@@ -226,32 +274,75 @@ export const WalletModal: React.FC<WalletModalProps> = ({
 
         {/* Main Content */}
         <main className="relative z-10 flex-1 overflow-y-auto custom-scrollbar p-5 space-y-4 w-full">
-        {/* 1. CURRENT BALANCE DISPLAY */}
-        <div className="p-4 rounded-2xl bg-[#111111] border border-white/10 text-center space-y-1 relative overflow-hidden shadow-sm">
+        {/* 1. SEPARATED BALANCE DISPLAY */}
+        <div className="p-4 rounded-2xl bg-[#111111] border border-white/10 space-y-2.5 relative overflow-hidden shadow-sm">
           <div className="flex items-center justify-between">
             <span className="text-[10px] font-arcade font-bold text-white/50 uppercase tracking-widest">
-              CURRENT WALLET BALANCE
+              YOUR WALLET BALANCES
             </span>
             <button
               onClick={() => {
                 soundService.playClick();
                 fetchLedger();
+                fetchBonus();
               }}
               className="p-1 rounded-lg bg-[#181818] text-white/60 hover:text-white"
+              title="Refresh Balance"
             >
               <RefreshCw className="w-3 h-3" />
             </button>
           </div>
 
-          <div className="font-arcade font-black text-3xl sm:text-4xl text-[#E8FF00] tracking-tight drop-shadow-[0_0_15px_rgba(232,255,0,0.3)]">
-            {currentBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} BIRR
+          <div className="grid grid-cols-2 gap-2">
+            {/* Cash Balance */}
+            <div className="p-2.5 rounded-xl bg-[#161616] border border-white/10 text-left">
+              <span className="text-[9px] font-arcade font-bold text-white/50 uppercase block">
+                Cash Balance
+              </span>
+              <span className="font-arcade font-black text-lg sm:text-xl text-[#E8FF00] tracking-tight block">
+                {currentBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ETB
+              </span>
+              <span className="text-[8px] font-arcade text-emerald-400 block mt-0.5">
+                ● Withdrawable
+              </span>
+            </div>
+
+            {/* Promotional Bonus */}
+            <div className="p-2.5 rounded-xl bg-[#161616] border border-amber-500/30 text-left relative">
+              <span className="text-[9px] font-arcade font-bold text-amber-400/80 uppercase block flex items-center justify-between">
+                <span>Bonus Balance</span>
+                {activeBonusData && activeBonusData.timeRemainingSeconds > 0 ? (
+                  <span className="text-[8px] px-1 py-0.2 rounded bg-amber-500/20 text-amber-300 font-mono">
+                    {formatCountdown(activeBonusData.timeRemainingSeconds)}
+                  </span>
+                ) : null}
+              </span>
+              <span className="font-arcade font-black text-lg sm:text-xl text-amber-400 tracking-tight block">
+                {((user?.bonusBalance ?? activeBonusData?.bonusBalance) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ETB
+              </span>
+              <span className="text-[8px] font-arcade text-amber-300/80 block mt-0.5">
+                ● Bingo Cards Only
+              </span>
+            </div>
           </div>
 
-          <div className="flex items-center justify-center gap-2 text-[10px] font-arcade text-white/40">
-            <span>PLAYER: <strong className="text-white">{user?.username}</strong></span>
-            <span>•</span>
-            <span className="text-emerald-400">● 100% READY TO PLAY</span>
+          {/* Total Playable Balance */}
+          <div className="pt-2 border-t border-white/5 flex items-center justify-between text-xs font-arcade">
+            <span className="text-white/50 uppercase tracking-wide text-[10px]">Total Playable:</span>
+            <span className="font-black text-white text-sm font-arcade">
+              {(currentBalance + ((user?.bonusBalance ?? activeBonusData?.bonusBalance) || 0)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ETB
+            </span>
           </div>
+
+          {/* Bonus Active Notice */}
+          {((user?.bonusBalance ?? activeBonusData?.bonusBalance) || 0) > 0 && (
+            <div className="p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[10px] text-amber-200/90 flex items-start gap-1.5 text-left">
+              <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
+              <span>
+                <strong>10% Promotional Bonus Active:</strong> Use for Bingo & Daily Grand Jackpot card purchases. Non-withdrawable. Expires exactly 24h after issuance.
+              </span>
+            </div>
+          )}
         </div>
 
         {/* 2. TAB SWITCHER */}
@@ -523,9 +614,21 @@ export const WalletModal: React.FC<WalletModalProps> = ({
               </div>
             </div>
 
+            {/* Cash Only Notice */}
+            <div className="p-2.5 rounded-xl bg-white/5 border border-white/10 text-[10px] font-arcade text-white/60 space-y-1">
+              <div className="flex justify-between items-center text-white/80 font-bold">
+                <span>Withdrawable Cash Balance:</span>
+                <span className="text-[#E8FF00] font-black">{currentBalance.toFixed(2)} ETB</span>
+              </div>
+              <p className="text-[9px] text-white/40 leading-relaxed">
+                * Note: Only unrestricted cash balances may be withdrawn. Promotional bonus balances are strictly non-withdrawable.
+              </p>
+            </div>
+
+            {/* Withdraw CTA */}
             <button
               onClick={handleWithdraw}
-              disabled={loading || !withdrawAmount || withdrawAmount <= 0 || withdrawAmount > currentBalance}
+              disabled={loading || !withdrawAmount || withdrawAmount < 10 || withdrawAmount > currentBalance}
               className="btn-neon w-full py-3.5 rounded-2xl text-xs font-arcade font-black uppercase tracking-wide cursor-pointer disabled:opacity-40"
             >
               {loading ? 'PROCESSING...' : `WITHDRAW ${withdrawAmount || 0} BIRR VIA TELEBIRR`}

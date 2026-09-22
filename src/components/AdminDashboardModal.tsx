@@ -46,7 +46,8 @@ import {
   LedgerEntry,
   AdminUserDetail,
   RoomSummary,
-  DailyJackpotAdminState
+  DailyJackpotAdminState,
+  PromotionalReward
 } from '../types/bingo.js';
 import { apiUrl } from '../config/api.js';
 import { soundService } from '../services/soundService.js';
@@ -60,7 +61,7 @@ interface AdminDashboardModalProps {
   user?: UserAccount | null;
 }
 
-type AdminTab = 'overview' | 'deposits' | 'withdrawals' | 'users' | 'transactions' | 'games' | 'audit_logs' | 'daily_jackpot';
+type AdminTab = 'overview' | 'deposits' | 'withdrawals' | 'users' | 'transactions' | 'games' | 'audit_logs' | 'daily_jackpot' | 'rewards';
 
 export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
   isOpen,
@@ -87,6 +88,7 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
   const [auditLogs, setAuditLogs] = useState<AuditLogRecord[]>([]);
   const [dailyJackpotAdmin, setDailyJackpotAdmin] = useState<DailyJackpotAdminState | null>(null);
   const [evaluatingJackpot, setEvaluatingJackpot] = useState<boolean>(false);
+  const [promotionalRewards, setPromotionalRewards] = useState<PromotionalReward[]>([]);
 
   // Search & Filter state
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -157,12 +159,13 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
 
   const preloadOverviewData = async () => {
     try {
-      const [depRes, withRes, userRes, roomRes, jackRes] = await Promise.all([
+      const [depRes, withRes, userRes, roomRes, jackRes, rewRes] = await Promise.all([
         fetch(apiUrl('/api/admin/deposits'), { headers: authHeaders }),
         fetch(apiUrl('/api/admin/withdrawals'), { headers: authHeaders }),
         fetch(apiUrl('/api/admin/users'), { headers: authHeaders }),
         fetch(apiUrl('/api/admin/games'), { headers: authHeaders }),
-        fetch(apiUrl('/api/admin/daily-jackpot'), { headers: authHeaders })
+        fetch(apiUrl('/api/admin/daily-jackpot'), { headers: authHeaders }),
+        fetch(apiUrl('/api/admin/rewards'), { headers: authHeaders })
       ]);
       if (depRes.ok) {
         const d = await depRes.json();
@@ -183,6 +186,10 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
       if (jackRes.ok) {
         const j = await jackRes.json();
         setDailyJackpotAdmin(j);
+      }
+      if (rewRes.ok) {
+        const rw = await rewRes.json();
+        setPromotionalRewards(rw.rewards || []);
       }
     } catch (e) {
       console.error('Failed to preload overview metrics:', e);
@@ -230,6 +237,11 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
         if (!res.ok) throw new Error('Failed to load Daily Grand Jackpot data');
         const d = await res.json();
         setDailyJackpotAdmin(d);
+      } else if (tab === 'rewards') {
+        const res = await fetch(apiUrl('/api/admin/rewards'), { headers: authHeaders });
+        if (!res.ok) throw new Error('Failed to load promotional rewards');
+        const d = await res.json();
+        setPromotionalRewards(d.rewards || []);
       }
     } catch (err: any) {
       setError(err.message || 'Authorization failed or network error');
@@ -597,6 +609,19 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
     });
   }, [transactions, txTypeFilter, searchQuery]);
 
+  const filteredRewards = useMemo(() => {
+    return promotionalRewards.filter((r) => {
+      const matchesStatus = filterStatus === 'ALL' || r.status === filterStatus;
+      const q = searchQuery.toLowerCase().trim();
+      const matchesSearch =
+        !q ||
+        r.id.toLowerCase().includes(q) ||
+        r.userId.toLowerCase().includes(q) ||
+        r.qualifyingDepositId.toLowerCase().includes(q);
+      return matchesStatus && matchesSearch;
+    });
+  }, [promotionalRewards, filterStatus, searchQuery]);
+
   if (!isOpen) return null;
 
   return (
@@ -871,6 +896,25 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
                   {dailyJackpotAdmin.currentRound.cards_sold}/200
                 </span>
               )}
+            </button>
+
+            {/* Nav Item: Promotional Rewards */}
+            <button
+              onClick={() => {
+                setActiveTab('rewards');
+                soundService.playClick();
+              }}
+              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl font-arcade font-bold text-xs transition-all cursor-pointer ${
+                activeTab === 'rewards'
+                  ? 'bg-amber-400/20 text-amber-300 border border-amber-400/40 shadow-[0_0_10px_rgba(245,158,11,0.15)]'
+                  : 'text-white/60 hover:text-white hover:bg-white/5'
+              }`}
+            >
+              <div className="flex items-center gap-2.5">
+                <Sparkles className="w-4 h-4 text-[#E8FF00]" />
+                <span>Rewards V2</span>
+              </div>
+              <span className="text-[10px] font-mono text-[#E8FF00] font-bold">{promotionalRewards.length}</span>
             </button>
           </div>
 
@@ -2547,6 +2591,220 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
                 )}
               </div>
             )}
+
+            {/* ═══════════════════════════════════════════════════════ */}
+            {/* 9. TAB: PROMOTIONAL REWARDS (FIRST DEPOSIT BONUS V2)    */}
+            {/* ═══════════════════════════════════════════════════════ */}
+            {activeTab === 'rewards' && (
+              <div className="space-y-4 animate-fadeIn">
+                {/* Header & KPI Summary */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-[#111111] border border-white/10 p-4 rounded-2xl">
+                  <div>
+                    <div className="flex items-center gap-2 font-arcade font-black text-sm text-[#E8FF00] uppercase">
+                      <Sparkles className="w-4 h-4" />
+                      <span>FIRST DEPOSIT PROMOTIONAL REWARDS V2</span>
+                    </div>
+                    <div className="text-[11px] text-white/60 mt-0.5 font-sans">
+                      10% first deposit bonus (max 50 ETB) • 24h expiration • Restricted to Bingo & Jackpot cards
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => loadTabData('rewards')}
+                      disabled={loading}
+                      className="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white font-arcade font-bold text-xs flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-[#E8FF00]' : ''}`} />
+                      <span>REFRESH</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Metrics Cards */}
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                  <div className="p-3.5 rounded-2xl bg-[#111111] border border-white/10 space-y-1">
+                    <div className="text-[10px] font-arcade text-white/50 uppercase">TOTAL BONUSES ISSUED</div>
+                    <div className="font-arcade font-black text-xl text-white">{promotionalRewards.length}</div>
+                    <div className="text-[10px] text-white/40 font-mono">100% 1st deposits only</div>
+                  </div>
+
+                  <div className="p-3.5 rounded-2xl bg-[#111111] border border-white/10 space-y-1">
+                    <div className="text-[10px] font-arcade text-white/50 uppercase">TOTAL BONUS ISSUED (ETB)</div>
+                    <div className="font-arcade font-black text-xl text-amber-300">
+                      {promotionalRewards.reduce((s, r) => s + r.bonusAmount, 0).toLocaleString()} ETB
+                    </div>
+                    <div className="text-[10px] text-white/40 font-mono">Max 50 ETB/player cap</div>
+                  </div>
+
+                  <div className="p-3.5 rounded-2xl bg-[#111111] border border-white/10 space-y-1">
+                    <div className="text-[10px] font-arcade text-white/50 uppercase">ACTIVE BONUS LIABILITY</div>
+                    <div className="font-arcade font-black text-xl text-[#E8FF00]">
+                      {promotionalRewards
+                        .filter(r => r.status === 'AWARDED' || r.status === 'PARTIALLY_CONSUMED')
+                        .reduce((s, r) => s + r.remainingAmount, 0)
+                        .toFixed(2)} ETB
+                    </div>
+                    <div className="text-[10px] text-emerald-400 font-mono">Restricted card balance</div>
+                  </div>
+
+                  <div className="p-3.5 rounded-2xl bg-[#111111] border border-white/10 space-y-1">
+                    <div className="text-[10px] font-arcade text-white/50 uppercase">EXPIRED / CONSUMED</div>
+                    <div className="font-arcade font-black text-xl text-rose-400">
+                      {promotionalRewards.filter(r => r.status === 'EXPIRED' || r.status === 'CONSUMED').length}
+                    </div>
+                    <div className="text-[10px] text-white/40 font-mono">Non-withdrawable lifecycle</div>
+                  </div>
+                </div>
+
+                {/* Filter and Search Bar */}
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
+                  <div className="relative flex-1">
+                    <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-white/40" />
+                    <input
+                      type="text"
+                      placeholder="Search reward ID, user ID, deposit ID..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-full pl-9 pr-4 py-2 rounded-xl bg-[#111111] border border-white/10 text-xs text-white placeholder-white/40 focus:outline-none focus:border-amber-400/50 font-sans"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-1 overflow-x-auto pb-1 sm:pb-0">
+                    {['ALL', 'AWARDED', 'PARTIALLY_CONSUMED', 'CONSUMED', 'EXPIRED'].map((st) => (
+                      <button
+                        key={st}
+                        onClick={() => setFilterStatus(st)}
+                        className={`px-3 py-1.5 rounded-xl font-arcade font-bold text-[10px] tracking-wider uppercase transition-all whitespace-nowrap cursor-pointer ${
+                          filterStatus === st
+                            ? 'bg-[#E8FF00] text-black shadow-[0_0_10px_rgba(232,255,0,0.3)]'
+                            : 'bg-white/5 text-white/60 hover:text-white hover:bg-white/10 border border-white/5'
+                        }`}
+                      >
+                        {st.replace('_', ' ')}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Rewards List: Mobile Card Layout */}
+                <div className="lg:hidden space-y-2.5">
+                  {filteredRewards.length === 0 ? (
+                    <div className="p-8 text-center bg-[#111111] border border-white/10 rounded-2xl text-white/40 font-arcade text-xs">
+                      NO PROMOTIONAL REWARDS FOUND
+                    </div>
+                  ) : (
+                    filteredRewards.map((rew) => (
+                      <div
+                        key={rew.id}
+                        className="p-3.5 rounded-2xl bg-[#111111] border border-white/10 space-y-2 font-mono text-xs"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-arcade font-bold text-white text-[11px]">{rew.id}</span>
+                          <span
+                            className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase ${
+                              rew.status === 'AWARDED'
+                                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                : rew.status === 'PARTIALLY_CONSUMED'
+                                ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                                : rew.status === 'EXPIRED'
+                                ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                                : 'bg-white/10 text-white/70'
+                            }`}
+                          >
+                            {rew.status}
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          <div>
+                            <span className="text-white/40 text-[10px]">USER ID: </span>
+                            <span className="text-white font-bold">{rew.userId}</span>
+                          </div>
+                          <div>
+                            <span className="text-white/40 text-[10px]">DEPOSIT: </span>
+                            <span className="text-white font-bold">{rew.depositAmount} ETB</span>
+                          </div>
+                          <div>
+                            <span className="text-white/40 text-[10px]">BONUS: </span>
+                            <span className="text-amber-300 font-bold">+{rew.bonusAmount} ETB</span>
+                          </div>
+                          <div>
+                            <span className="text-white/40 text-[10px]">REMAINING: </span>
+                            <span className="text-[#E8FF00] font-bold">{rew.remainingAmount.toFixed(2)} ETB</span>
+                          </div>
+                        </div>
+
+                        <div className="pt-2 border-t border-white/5 text-[10px] text-white/50 space-y-0.5">
+                          <div>Issued: {new Date(rew.issuedAt).toLocaleString()}</div>
+                          <div>Expires: {new Date(rew.expiresAt).toLocaleString()}</div>
+                          <div>Qualifying Dep: {rew.qualifyingDepositId}</div>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                {/* Rewards List: Desktop Table */}
+                <div className="hidden lg:block rounded-2xl border border-white/10 overflow-hidden bg-[#111111]">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="border-b border-white/10 bg-white/[0.02] text-white/50 font-arcade font-bold uppercase text-[10px]">
+                        <th className="p-3.5">Reward ID</th>
+                        <th className="p-3.5">Player / User ID</th>
+                        <th className="p-3.5">Qualifying Deposit</th>
+                        <th className="p-3.5">Deposit Amt</th>
+                        <th className="p-3.5">Bonus Amt</th>
+                        <th className="p-3.5">Remaining</th>
+                        <th className="p-3.5">Status</th>
+                        <th className="p-3.5">Issued At</th>
+                        <th className="p-3.5">Expires At</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/5 font-mono">
+                      {filteredRewards.length === 0 ? (
+                        <tr>
+                          <td colSpan={9} className="p-8 text-center text-white/40 font-arcade">
+                            NO PROMOTIONAL REWARDS MATCH THE FILTER
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredRewards.map((rew) => (
+                          <tr key={rew.id} className="hover:bg-white/[0.02] transition-colors">
+                            <td className="p-3.5 text-white font-bold">{rew.id}</td>
+                            <td className="p-3.5 text-white/90">{rew.userId}</td>
+                            <td className="p-3.5 text-white/60 text-[11px]">{rew.qualifyingDepositId}</td>
+                            <td className="p-3.5 text-white">{rew.depositAmount.toLocaleString()} ETB</td>
+                            <td className="p-3.5 text-amber-300 font-bold">+{rew.bonusAmount} ETB</td>
+                            <td className="p-3.5 text-[#E8FF00] font-bold">{rew.remainingAmount.toFixed(2)} ETB</td>
+                            <td className="p-3.5">
+                              <span
+                                className={`px-2 py-0.5 rounded text-[9px] font-mono font-bold uppercase ${
+                                  rew.status === 'AWARDED'
+                                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                    : rew.status === 'PARTIALLY_CONSUMED'
+                                    ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                                    : rew.status === 'EXPIRED'
+                                    ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                                    : 'bg-white/10 text-white/70'
+                                }`}
+                              >
+                                {rew.status}
+                              </span>
+                            </td>
+                            <td className="p-3.5 text-white/60 text-[11px]">
+                              {new Date(rew.issuedAt).toLocaleString()}
+                            </td>
+                            <td className="p-3.5 text-white/60 text-[11px]">
+                              {new Date(rew.expiresAt).toLocaleString()}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
         </main>
       </div>
@@ -2688,6 +2946,17 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
               >
                 <Trophy className="w-4 h-4 text-amber-400" />
                 <span>Daily Grand Jackpot</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setActiveTab('rewards');
+                  setMobileMenuOpen(false);
+                }}
+                className="w-full p-3 rounded-xl bg-white/5 hover:bg-white/10 flex items-center gap-3 font-arcade text-xs font-bold text-white text-left"
+              >
+                <Sparkles className="w-4 h-4 text-[#E8FF00]" />
+                <span>Promotional Rewards V2</span>
               </button>
 
               <button

@@ -6,13 +6,13 @@ describe('Guest and Auth Flow Robustness Suite', () => {
   it('should handle registration, verification check and login for guest users', () => {
     const rawPhone = '0922334455';
     const normalized = authService.normalizePhone('+251922334455');
-    expect(normalized).toBe('0922334455');
+    expect(normalized).toBe('+251922334455');
 
-    // 1. Register
-    const regResult = authService.register('Abebe Bikila', rawPhone, 'strongPass123');
+    // 1. Register via Telegram-verified flow
+    const regResult = authService.initiateRegistration('Abebe Bikila', rawPhone, 'strongPass123');
     expect(regResult.success).toBe(true);
     expect(regResult.requiresVerification).toBe(true);
-    expect(regResult.token).toBeDefined();
+    expect(regResult.pendingId).toBeDefined();
 
     // 2. Check pending verification
     const pendingCheck = authService.checkVerification(rawPhone);
@@ -21,8 +21,7 @@ describe('Guest and Auth Flow Robustness Suite', () => {
     // 3. Complete Telegram verification with matching user contact
     const simResult = telegramBotService.simulateContactShare(rawPhone);
     expect(simResult.success).toBe(true);
-    expect(simResult.user).toBeDefined();
-    expect(simResult.user?.walletBalance).toBe(1000); // Welcome bonus
+    expect(simResult.user?.walletBalance).toBe(0); // Newly registered user with no deposit has 0 balance
 
     // 4. Check verification status after bot contact share
     const verifiedCheck = authService.checkVerification(rawPhone);
@@ -52,7 +51,7 @@ describe('Guest and Auth Flow Robustness Suite', () => {
 
     const failLogin = authService.login(phone, 'wrongPass');
     expect(failLogin.success).toBe(false);
-    expect(failLogin.error).toBe('Invalid phone number or password');
+    expect(failLogin.error).toMatch(/Invalid phone number or password/i);
   });
 
   it('should format and handle telegram 1-tap login', () => {

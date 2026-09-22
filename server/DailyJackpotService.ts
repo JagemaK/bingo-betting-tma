@@ -140,7 +140,10 @@ export class DailyJackpotService {
   constructor(db: DatabaseService, io?: Server) {
     this.db = db;
     this.io = io;
-    this.secretSeed = process.env.JACKPOT_SERVER_SECRET || 'bingo_daily_jackpot_secret_2026';
+    if (process.env.NODE_ENV === 'production' && !process.env.JACKPOT_SERVER_SECRET) {
+      throw new Error('FATAL: JACKPOT_SERVER_SECRET environment variable is mandatory in production');
+    }
+    this.secretSeed = process.env.JACKPOT_SERVER_SECRET || 'bingo_daily_jackpot_secret_dev_test';
     this.initCardCatalog();
   }
 
@@ -286,6 +289,7 @@ export class DailyJackpotService {
     isTaken: boolean;
     isOwnedByMe: boolean;
     price: number;
+    grid: any;
   }> {
     const round = roundId ? this.db.getDailyJackpotRound(roundId) : this.getOrCreateCurrentRound();
     if (!round) return [];
@@ -303,7 +307,8 @@ export class DailyJackpotService {
         cardNumber: i,
         isTaken: Boolean(ownerId),
         isOwnedByMe: Boolean(userId && ownerId === userId),
-        price: 999
+        price: 999,
+        grid: this.getCardGrid(i)
       });
     }
     return result;
@@ -494,21 +499,46 @@ export class DailyJackpotService {
   }
 
   /**
+   * Idempotently catches up on missed evaluations due to server downtime or restart
+   */
+  public checkMissedEvaluations(): void {
+    try {
+      const time = getAddisAbabaTimeParts();
+      const todayDate = getAddisAbabaDateString();
+      const round = this.db.getDailyJackpotRoundByDate(todayDate);
+
+      // If at or past 12:00 PM Addis Ababa and the round has not yet finished or postponed
+      if (time.hour >= 12 && round && (round.status === 'REGISTRATION_OPEN' || round.status === 'REGISTRATION_CLOSED' || round.status === 'CHECKING_ELIGIBILITY')) {
+        console.log(`[DailyJackpotService] Recovery catch-up: 12:00 PM cutoff passed for ${todayDate} (status=${round.status}). Evaluating jackpot...`);
+        this.evaluateDailyJackpot();
+      }
+    } catch (err) {
+      console.error('[DailyJackpotService] Error checking missed evaluations:', err);
+    }
+  }
+
+  /**
    * Background scheduler running in Africa/Addis_Ababa timezone
    */
   public startDailyScheduler() {
     if (this.schedulerInterval) return;
+
+    // Immediately run recovery check on service startup
+    this.checkMissedEvaluations();
 
     this.schedulerInterval = setInterval(() => {
       try {
         const time = getAddisAbabaTimeParts();
         const todayDate = getAddisAbabaDateString();
 
-        // Check if current time is 12:00 PM Addis Ababa
-        if (time.hour === 12 && time.minute === 0) {
-          if (this.lastEvaluatedDate !== todayDate) {
-            console.log(`[DailyJackpotService] 12:00 PM Addis Ababa reached for ${todayDate}. Evaluating jackpot...`);
-            this.evaluateDailyJackpot();
+        // Check if 12:00 PM Addis Ababa has been reached and today's round needs evaluation
+        if (time.hour >= 12) {
+          const round = this.db.getDailyJackpotRoundByDate(todayDate);
+          if (round && (round.status === 'REGISTRATION_OPEN' || round.status === 'REGISTRATION_CLOSED' || round.status === 'CHECKING_ELIGIBILITY')) {
+            if (this.lastEvaluatedDate !== todayDate) {
+              console.log(`[DailyJackpotService] 12:00 PM Addis Ababa reached for ${todayDate}. Evaluating jackpot...`);
+              this.evaluateDailyJackpot();
+            }
           }
         }
       } catch (err) {

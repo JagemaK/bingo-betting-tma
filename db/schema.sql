@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS wallets (
     user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     balance REAL NOT NULL DEFAULT 0.0 CHECK(balance >= 0.0),
     reserved_balance REAL NOT NULL DEFAULT 0.0 CHECK(reserved_balance >= 0.0),
+    bonus_balance REAL NOT NULL DEFAULT 0.0 CHECK(bonus_balance >= 0.0),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -74,7 +75,7 @@ CREATE TABLE IF NOT EXISTS ledger_transactions (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     username TEXT NOT NULL,
-    type TEXT NOT NULL CHECK(type IN ('DEPOSIT', 'BET', 'WIN_PAYOUT', 'WITHDRAWAL', 'REFUND', 'BONUS', 'LOSS', 'ADMIN_ADJUSTMENT')),
+    type TEXT NOT NULL CHECK(type IN ('DEPOSIT', 'BET', 'WIN_PAYOUT', 'WITHDRAWAL', 'REFUND', 'BONUS', 'LOSS', 'ADMIN_ADJUSTMENT', 'ESCROW_HOLD')),
     amount REAL NOT NULL,
     balance_before REAL NOT NULL,
     balance_after REAL NOT NULL,
@@ -259,3 +260,27 @@ CREATE TABLE IF NOT EXISTS daily_jackpot_tickets (
 
 CREATE INDEX IF NOT EXISTS idx_daily_jackpot_tickets_round ON daily_jackpot_tickets(round_id);
 CREATE INDEX IF NOT EXISTS idx_daily_jackpot_tickets_user ON daily_jackpot_tickets(user_id);
+
+-- 16. Promotional Rewards table (First Deposit Bonus & Promotional Ledger)
+CREATE TABLE IF NOT EXISTS promotional_rewards (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    reward_type TEXT NOT NULL DEFAULT 'FIRST_DEPOSIT_BONUS',
+    source TEXT NOT NULL DEFAULT 'TELEBIRR_DEPOSIT',
+    qualifying_deposit_id TEXT NOT NULL UNIQUE REFERENCES deposit_requests(id),
+    deposit_amount REAL NOT NULL CHECK(deposit_amount > 0),
+    bonus_percentage REAL NOT NULL DEFAULT 10.0,
+    bonus_amount REAL NOT NULL CHECK(bonus_amount > 0 AND bonus_amount <= 50.0),
+    remaining_amount REAL NOT NULL CHECK(remaining_amount >= 0.0 AND remaining_amount <= bonus_amount),
+    status TEXT NOT NULL CHECK(status IN ('AWARDED', 'PARTIALLY_CONSUMED', 'CONSUMED', 'EXPIRED')),
+    issued_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    consumed_at TEXT,
+    expired_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_rewards_user ON promotional_rewards(user_id);
+CREATE INDEX IF NOT EXISTS idx_rewards_status_expires ON promotional_rewards(status, expires_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rewards_user_first_deposit ON promotional_rewards(user_id) WHERE reward_type = 'FIRST_DEPOSIT_BONUS';

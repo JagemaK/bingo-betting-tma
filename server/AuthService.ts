@@ -1,6 +1,9 @@
 import crypto from 'crypto';
 import { ledgerService, UserRole, AccountStatus } from './LedgerService.js';
-import { databaseService, UserRow, SessionRow } from './DatabaseService.js';
+import { databaseService, DatabaseService, UserRow, SessionRow } from './DatabaseService.js';
+import { normalizeEthiopianPhone, isValidEthiopianPhone, maskPhone } from './PhoneUtils.js';
+import { hashPassword, verifyPassword } from './PasswordUtils.js';
+import { authRateLimiter } from './RateLimiter.js';
 
 export interface TelegramUserData {
   id: number | string;
@@ -139,10 +142,35 @@ export function validateUsername(username: string): { isValid: boolean; normaliz
   return { isValid: true, normalized: trimmed.toLowerCase() };
 }
 
+// Bounded in-memory replay cache (hash -> expiresAtMs) with automatic expiry eviction
+const initDataReplayCache = new Map<string, number>();
+const MAX_REPLAY_CACHE_SIZE = 10000;
+
+export function checkAndRecordInitDataReplay(hashHex: string, ttlMs: number = 86400 * 1000): boolean {
+  const now = Date.now();
+  // Evict expired entries if cache exceeds threshold
+  if (initDataReplayCache.size > MAX_REPLAY_CACHE_SIZE) {
+    for (const [k, exp] of initDataReplayCache.entries()) {
+      if (now > exp) initDataReplayCache.delete(k);
+    }
+  }
+  const exp = initDataReplayCache.get(hashHex);
+  if (exp && now <= exp) {
+    return true; // Replay detected!
+  }
+  initDataReplayCache.set(hashHex, now + ttlMs);
+  return false;
+}
+
+export function clearInitDataReplayCache(): void {
+  initDataReplayCache.clear();
+}
+
 export function verifyTelegramInitData(
   initData: string,
   botToken: string,
-  maxAgeSeconds: number = 86400
+  maxAgeSeconds: number = 86400,
+  preventReplay: boolean = false
 ): { isValid: boolean; user?: TelegramUserData; error?: string; startParam?: string } {
   if (!initData) {
     return { isValid: false, error: 'Missing initData string' };
@@ -170,23 +198,43 @@ export function verifyTelegramInitData(
     const secretKey = crypto.createHmac('sha256', 'WebAppData').update(botToken).digest();
     const calculatedHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
 
-    if (calculatedHash !== hash) {
+    // Constant-time HMAC verification preventing timing side-channel attacks
+    const calcBuf = Buffer.from(calculatedHash, 'hex');
+    const hashBuf = Buffer.from(hash, 'hex');
+    if (calcBuf.length !== 32 || hashBuf.length !== 32 || !crypto.timingSafeEqual(calcBuf, hashBuf)) {
       return { isValid: false, error: 'Invalid HMAC-SHA256 signature: hash mismatch (tampered or spoofed initData)' };
     }
 
+    // Replay defense: prevent reuse of the identical signed payload
+    if (preventReplay && checkAndRecordInitDataReplay(hash)) {
+      return { isValid: false, error: 'Telegram initData replay detected: payload has already been used' };
+    }
+
     const authDateStr = searchParams.get('auth_date');
-    if (authDateStr) {
-      const authDate = parseInt(authDateStr, 10);
-      const currentTime = Math.floor(Date.now() / 1000);
-      if (currentTime - authDate > maxAgeSeconds) {
-        return { isValid: false, error: 'Telegram initData is expired (older than 24 hours)' };
-      }
+    if (!authDateStr) {
+      return { isValid: false, error: 'Missing auth_date in Telegram initData' };
+    }
+    const authDate = parseInt(authDateStr, 10);
+    if (isNaN(authDate)) {
+      return { isValid: false, error: 'Invalid auth_date format in Telegram initData' };
+    }
+    const currentTime = Math.floor(Date.now() / 1000);
+    if (currentTime - authDate > maxAgeSeconds) {
+      return { isValid: false, error: 'Telegram initData is expired (older than 24 hours)' };
+    }
+    // Prevent future-dated timestamps with 60-second clock skew tolerance
+    if (authDate > currentTime + 60) {
+      return { isValid: false, error: 'Telegram initData auth_date is in the future' };
     }
 
     const userRaw = searchParams.get('user');
     let user: TelegramUserData | undefined = undefined;
     if (userRaw) {
-      user = JSON.parse(userRaw);
+      try {
+        user = JSON.parse(userRaw);
+      } catch {
+        return { isValid: false, error: 'Malformed user JSON in Telegram initData' };
+      }
     }
 
     const startParam = searchParams.get('start_param') || undefined;
@@ -234,6 +282,7 @@ export function createSignedTelegramInitData(
 }
 
 export class AuthService {
+  public databaseService: DatabaseService;
   private botToken: string = process.env.TELEGRAM_BOT_TOKEN || 'test_mock_bot_token_123456:ABCdefGHIjklMNOpqrSTUvwxYZ';
 
   // In-flight temporary registration data
@@ -245,12 +294,13 @@ export class AuthService {
   private pendingById: Map<string, string> = new Map();
   private passwordResetRequests: Map<string, any> = new Map();
 
-  constructor() {
+  constructor(customDb?: DatabaseService) {
+    this.databaseService = customDb || databaseService;
     this.seedBots();
   }
 
-  private hashPassword(password: string, salt: string): string {
-    return crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex');
+  private hashPassword(password: string, salt?: string): string {
+    return hashPassword(password).hash;
   }
 
   private generateSalt(): string {
@@ -262,25 +312,14 @@ export class AuthService {
     if (!clean) clean = 'BINGO';
     let code = `BINGO_${clean}`;
     let counter = 1;
-    while (databaseService.getUserByReferralCode(code)) {
+    while (this.databaseService.getUserByReferralCode(code)) {
       code = `BINGO_${clean}_${counter++}`;
     }
     return code;
   }
 
   public normalizePhone(phone: string): string {
-    if (!phone) return '';
-    let digits = phone.replace(/\D/g, '');
-    if (digits.startsWith('251')) {
-      digits = digits.substring(3);
-    }
-    if (digits.startsWith('0')) {
-      return digits;
-    }
-    if (digits.length === 9 && (digits.startsWith('9') || digits.startsWith('7'))) {
-      return '0' + digits;
-    }
-    return digits;
+    return normalizeEthiopianPhone(phone) || '';
   }
 
   private seedBots() {
@@ -296,8 +335,8 @@ export class AuthService {
     ];
 
     for (const b of seedBots) {
-      if (!databaseService.getUserById(b.id)) {
-        databaseService.createUser({
+      if (!this.databaseService.getUserById(b.id)) {
+        this.databaseService.createUser({
           id: b.id,
           telegram_id: `bot_${b.id}`,
           username: b.username,
@@ -305,14 +344,14 @@ export class AuthService {
           is_bot: true,
           role: 'USER'
         });
-        databaseService.getOrCreateWallet(b.id, b.balance);
+        this.databaseService.getOrCreateWallet(b.id, b.balance);
       }
     }
   }
 
-  public verifyTelegramInitData(initData: string, botToken?: string, maxAgeSeconds?: number) {
+  public verifyTelegramInitData(initData: string, botToken?: string, maxAgeSeconds?: number, preventReplay: boolean = false) {
     const token = botToken || this.botToken || process.env.TELEGRAM_BOT_TOKEN || '';
-    return verifyTelegramInitData(initData, token, maxAgeSeconds);
+    return verifyTelegramInitData(initData, token, maxAgeSeconds, preventReplay);
   }
 
   public createSignedTelegramInitData(
@@ -347,7 +386,7 @@ export class AuthService {
     const telegramId = String(tgUser.id);
     const referralCode = optionalReferralCode || verification.startParam || tgUser.start_param;
 
-    const existingUser = databaseService.getUserByTelegramId(telegramId);
+    const existingUser = this.databaseService.getUserByTelegramId(telegramId);
 
     if (existingUser) {
       if (existingUser.registration_status === 'COMPLETED') {
@@ -364,11 +403,11 @@ export class AuthService {
           updates.role = 'ADMIN';
         }
 
-        const updated = databaseService.updateUser(existingUser.id, updates);
-        const wallet = databaseService.getOrCreateWallet(updated.id);
+        const updated = this.databaseService.updateUser(existingUser.id, updates);
+        const wallet = this.databaseService.getOrCreateWallet(updated.id);
 
         // Issue fresh persistent session for this specific Telegram ID
-        const session = databaseService.createSession(updated.id, telegramId);
+        const session = this.databaseService.createSession(updated.id, telegramId);
 
         return {
           success: true,
@@ -460,12 +499,12 @@ export class AuthService {
     const rawReferral = (referralCodeInput || pendingData.referralCode || '').trim().toUpperCase();
 
     try {
-      return databaseService.transaction(() => {
+      return this.databaseService.transaction(() => {
         // 1. Check if user with this telegram_id already completed registration
-        const existingTgUser = databaseService.getUserByTelegramId(telegramId);
+        const existingTgUser = this.databaseService.getUserByTelegramId(telegramId);
         if (existingTgUser && existingTgUser.registration_status === 'COMPLETED') {
-          const session = databaseService.createSession(existingTgUser.id, telegramId);
-          const wallet = databaseService.getOrCreateWallet(existingTgUser.id);
+          const session = this.databaseService.createSession(existingTgUser.id, telegramId);
+          const wallet = this.databaseService.getOrCreateWallet(existingTgUser.id);
           const existingAccount = {
             id: existingTgUser.id,
             playerId: existingTgUser.id,
@@ -482,7 +521,7 @@ export class AuthService {
         }
 
         // 2. Enforce UNIQUE username constraint
-        const existingNameOwner = databaseService.getUserByUsername(cleanUsername);
+        const existingNameOwner = this.databaseService.getUserByUsername(cleanUsername);
         if (existingNameOwner && existingNameOwner.telegram_id !== telegramId) {
           return {
             success: false,
@@ -493,7 +532,7 @@ export class AuthService {
         // 3. Validate referral code if supplied
         let referrerUserId: string | undefined = undefined;
         if (rawReferral) {
-          const referrer = databaseService.getUserByReferralCode(rawReferral);
+          const referrer = this.databaseService.getUserByReferralCode(rawReferral);
           if (!referrer) {
             return { success: false, error: 'Invalid referral code: The referral code entered does not exist.' };
           }
@@ -513,7 +552,7 @@ export class AuthService {
 
         let userRow: UserRow;
         if (existingTgUser) {
-          userRow = databaseService.updateUser(existingTgUser.id, {
+          userRow = this.databaseService.updateUser(existingTgUser.id, {
             username: cleanUsername,
             referral_code: userReferralCode,
             referred_by: referrerUserId,
@@ -522,7 +561,7 @@ export class AuthService {
             avatar_url: telegramUser.photo_url || existingTgUser.avatar_url
           });
         } else {
-          userRow = databaseService.createUser({
+          userRow = this.databaseService.createUser({
             id: playerId,
             telegram_id: telegramId,
             telegram_username: telegramUser.username,
@@ -536,20 +575,10 @@ export class AuthService {
             registration_status: 'COMPLETED',
             avatar_url: telegramUser.photo_url || ''
           });
-
-          // Credit welcome bonus (1,000 Birr) in wallet and ledger
-          databaseService.recordLedgerTransaction({
-            userId: playerId,
-            username: cleanUsername,
-            type: 'BONUS',
-            amount: 1000.0,
-            description: 'Welcome Sign-Up Bonus',
-            referenceId: `bonus_welcome_${playerId}`
-          });
         }
 
-        const wallet = databaseService.getOrCreateWallet(userRow.id);
-        const session = databaseService.createSession(userRow.id, telegramId);
+        const wallet = this.databaseService.getOrCreateWallet(userRow.id);
+        const session = this.databaseService.createSession(userRow.id, telegramId);
 
         this.tempRegistrations.delete(tempToken);
 
@@ -579,7 +608,7 @@ export class AuthService {
       return { valid: false, status: 'UNAUTHENTICATED', error: 'Session token required' };
     }
 
-    const session = databaseService.getRawSession(token);
+    const session = this.databaseService.getRawSession(token);
     if (!session) {
       return { valid: false, status: 'UNAUTHENTICATED', error: 'Invalid or missing session' };
     }
@@ -592,13 +621,13 @@ export class AuthService {
       return { valid: false, status: 'EXPIRED', error: 'Session has expired. Please log in again.' };
     }
 
-    const user = databaseService.getUserById(session.user_id);
-    if (!user || user.account_status === 'BANNED') {
+    const user = this.databaseService.getUserById(session.user_id);
+    if (!user || user.account_status === 'BANNED' || user.account_status === 'SUSPENDED') {
       return { valid: false, status: 'REVOKED', error: 'User account suspended or banned' };
     }
 
-    databaseService.touchSession(token);
-    const wallet = databaseService.getOrCreateWallet(user.id);
+    this.databaseService.touchSession(token);
+    const wallet = this.databaseService.getOrCreateWallet(user.id);
 
     return {
       valid: true,
@@ -612,6 +641,8 @@ export class AuthService {
         username: user.username,
         walletBalance: wallet.balance,
         reservedBalance: wallet.reserved_balance,
+        bonusBalance: wallet.bonus_balance || 0.0,
+        totalPlayableBalance: Number(((wallet.balance || 0) + (wallet.bonus_balance || 0)).toFixed(2)),
         avatarUrl: user.avatar_url,
         isBot: Boolean(user.is_bot),
         role: user.role,
@@ -624,9 +655,9 @@ export class AuthService {
   }
 
   public getUserByTelegramId(telegramId: string): UserRecord | undefined {
-    const u = databaseService.getUserByTelegramId(String(telegramId));
+    const u = this.databaseService.getUserByTelegramId(String(telegramId));
     if (!u) return undefined;
-    const w = databaseService.getOrCreateWallet(u.id);
+    const w = this.databaseService.getOrCreateWallet(u.id);
     return {
       ...u,
       playerId: u.id,
@@ -638,7 +669,7 @@ export class AuthService {
   public get sessions() {
     return {
       get: (token: string) => {
-        const raw = databaseService.getRawSession(token);
+        const raw = this.databaseService.getRawSession(token);
         if (!raw) return undefined;
         return {
           ...raw,
@@ -657,11 +688,12 @@ export class AuthService {
 
   public getFullUserRecordByToken(token: string): UserRecord | null {
     if (!token) return null;
-    const session = databaseService.getSession(token);
+    // Use getRawSession to bypass revocation checks — this method is for admin/test verification of DB state
+    const session = this.databaseService.getRawSession(token);
     if (!session) return null;
-    const u = databaseService.getUserById(session.user_id);
+    const u = this.databaseService.getUserById(session.user_id);
     if (!u) return null;
-    const w = databaseService.getOrCreateWallet(u.id);
+    const w = this.databaseService.getOrCreateWallet(u.id);
     return {
       ...u,
       playerId: u.id,
@@ -672,15 +704,15 @@ export class AuthService {
 
   public verifySessionMatchesTelegram(token: string, telegramId: string): boolean {
     if (!token || !telegramId) return false;
-    const session = databaseService.getSession(token);
+    const session = this.databaseService.getSession(token);
     if (!session) return false;
     return String(session.telegram_id) === String(telegramId);
   }
 
   public getUserById(playerId: string): UserRecord | undefined {
-    const u = databaseService.getUserById(playerId);
+    const u = this.databaseService.getUserById(playerId);
     if (!u) return undefined;
-    const w = databaseService.getOrCreateWallet(u.id);
+    const w = this.databaseService.getOrCreateWallet(u.id);
     return {
       ...u,
       playerId: u.id,
@@ -690,29 +722,47 @@ export class AuthService {
   }
 
   public getAllUsers(): any[] {
-    const users = databaseService.getAllUsers();
+    const users = this.databaseService.getAllUsers();
     return users.map(u => {
-      const w = databaseService.getOrCreateWallet(u.id);
+      const w = this.databaseService.getOrCreateWallet(u.id);
       return {
-        ...u,
+        id: u.id,
         playerId: u.id,
+        telegram_id: u.telegram_id,
+        telegram_username: u.telegram_username,
+        first_name: u.first_name,
+        last_name: u.last_name,
+        username: u.username,
+        phone: u.phone,
+        role: u.role,
+        account_status: u.account_status,
+        accountStatus: u.account_status,
+        registration_status: u.registration_status,
+        referral_code: u.referral_code,
+        referred_by: u.referred_by,
+        avatar_url: u.avatar_url,
+        is_bot: Boolean(u.is_bot),
         walletBalance: w.balance,
         reservedBalance: w.reserved_balance,
-        accountStatus: u.account_status,
+        bonusBalance: w.bonus_balance || 0.0,
+        totalPlayableBalance: Number(((w.balance || 0) + (w.bonus_balance || 0)).toFixed(2)),
+        created_at: u.created_at,
         registrationDate: u.created_at,
+        updated_at: u.updated_at,
+        last_login_at: u.last_login_at,
         lastActivityDate: u.last_login_at || u.updated_at
       };
     });
   }
 
   public updateUserStatus(adminId: string, targetPlayerId: string, status: 'ACTIVE' | 'SUSPENDED' | 'BANNED'): any {
-    const user = databaseService.getUserById(targetPlayerId);
+    const user = this.databaseService.getUserById(targetPlayerId);
     if (!user) throw new Error('Target user not found');
 
-    const updated = databaseService.updateUser(targetPlayerId, { account_status: status });
+    const updated = this.databaseService.updateUser(targetPlayerId, { account_status: status });
 
-    if (status === 'BANNED') {
-      databaseService.revokeAllUserSessions(targetPlayerId);
+    if (status === 'BANNED' || status === 'SUSPENDED') {
+      this.databaseService.revokeAllUserSessions(targetPlayerId);
     }
 
     ledgerService.recordAuditLog(
@@ -723,7 +773,7 @@ export class AuthService {
       { previousStatus: user.account_status, newStatus: status }
     );
 
-    const w = databaseService.getOrCreateWallet(updated.id);
+    const w = this.databaseService.getOrCreateWallet(updated.id);
     return {
       ...updated,
       playerId: updated.id,
@@ -733,7 +783,7 @@ export class AuthService {
 
   public logout(token: string): boolean {
     if (!token) return false;
-    databaseService.revokeSession(token);
+    this.databaseService.revokeSession(token);
     return true;
   }
 
@@ -742,10 +792,10 @@ export class AuthService {
   public initiateRegistration(name: string, phone: string, password: string) {
     const normalizedPhone = this.normalizePhone(phone);
     if (!name || name.trim().length < 2) return { success: false, error: 'Please enter a valid full name' };
-    if (!/^(09|07)\d{8}$/.test(normalizedPhone)) return { success: false, error: 'Please enter a valid Ethiopian phone number (09... or 07...)' };
+    if (!isValidEthiopianPhone(normalizedPhone)) return { success: false, error: 'Please enter a valid Ethiopian phone number (e.g. 0912345678 or +251912345678)' };
     if (!password || password.length < 6) return { success: false, error: 'Password must be at least 6 characters' };
 
-    const existing = databaseService.getUserByPhone(normalizedPhone);
+    const existing = this.databaseService.getUserByPhone(normalizedPhone);
     if (existing) return { success: false, error: 'An account with this phone number already exists. Please log in.' };
 
     const pendingId = `reg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
@@ -766,7 +816,7 @@ export class AuthService {
     this.pendingById.set(pendingId, normalizedPhone);
 
     // Persist to database so server restart does not lose sign-up requests
-    databaseService.createPendingRegistration({
+    this.databaseService.createPendingRegistration({
       id: pendingId,
       phone: normalizedPhone,
       name: name.trim(),
@@ -777,10 +827,16 @@ export class AuthService {
 
     return {
       success: true,
+      requiresVerification: true,
       pendingId,
       phone: normalizedPhone,
       botUsername: process.env.TELEGRAM_BOT_USERNAME || 'BINGOBEET_BOT',
-      botUrl: `https://t.me/${process.env.TELEGRAM_BOT_USERNAME || 'BINGOBEET_BOT'}?start=reg_${normalizedPhone}`
+      botUrl: `https://t.me/${process.env.TELEGRAM_BOT_USERNAME || 'BINGOBEET_BOT'}?start=reg_${normalizedPhone}`,
+      user: {
+        playerId: `pending_${pendingId}`,
+        username: name.trim(),
+        walletBalance: 0
+      }
     };
   }
 
@@ -799,13 +855,13 @@ export class AuthService {
     }
 
     // Check persistent database table for pending registration
-    const dbPending = databaseService.getPendingRegistrationByPhone(phone) || databaseService.getPendingRegistrationById(identifier);
+    const dbPending = this.databaseService.getPendingRegistrationByPhone(phone) || this.databaseService.getPendingRegistrationById(identifier);
     if (dbPending) {
       if (dbPending.status === 'VERIFIED') {
-        const user = databaseService.getUserByPhone(dbPending.phone);
+        const user = this.databaseService.getUserByPhone(dbPending.phone);
         if (user) {
-          const session = databaseService.createSession(user.id, String(user.telegram_id || ''));
-          const wallet = databaseService.getOrCreateWallet(user.id);
+          const session = this.databaseService.createSession(user.id, String(user.telegram_id || ''));
+          const wallet = this.databaseService.getOrCreateWallet(user.id);
           const userRecord: UserRecord = {
             ...user,
             playerId: user.id,
@@ -839,10 +895,10 @@ export class AuthService {
     }
 
     // Fallback: check if already completed user
-    const user = databaseService.getUserByPhone(phone);
+    const user = this.databaseService.getUserByPhone(phone);
     if (user && user.registration_status === 'COMPLETED') {
-      const session = databaseService.createSession(user.id, String(user.telegram_id || ''));
-      const wallet = databaseService.getOrCreateWallet(user.id);
+      const session = this.databaseService.createSession(user.id, String(user.telegram_id || ''));
+      const wallet = this.databaseService.getOrCreateWallet(user.id);
       const userRecord: UserRecord = {
         ...user,
         playerId: user.id,
@@ -872,11 +928,21 @@ export class AuthService {
     const playerId = `tg_${telegramId}`;
 
     try {
-      // 0. Check if user already completed
-      const existingUser = databaseService.getUserById(playerId) || databaseService.getUserByTelegramId(String(telegramId));
+      // 0. Check if user already exists (by playerId, Telegram ID, or registered phone)
+      let existingUser = this.databaseService.getUserById(playerId) ||
+                         this.databaseService.getUserByTelegramId(String(telegramId)) ||
+                         this.databaseService.getUserByPhone(normalizedPhone);
       if (existingUser) {
-        const session = databaseService.createSession(existingUser.id, String(telegramId));
-        const wallet = databaseService.getOrCreateWallet(existingUser.id);
+        // Link Telegram ID to existing account if not yet linked
+        if (existingUser.telegram_id !== String(telegramId)) {
+          existingUser = this.databaseService.updateUser(existingUser.id, {
+            telegram_id: String(telegramId),
+            telegram_username: telegramUsername || existingUser.telegram_username,
+            registration_status: 'COMPLETED'
+          });
+        }
+        const session = this.databaseService.createSession(existingUser.id, String(telegramId));
+        const wallet = this.databaseService.getOrCreateWallet(existingUser.id);
         const userRecord: UserRecord = {
           ...existingUser,
           playerId: existingUser.id,
@@ -895,7 +961,7 @@ export class AuthService {
       // 1. If pending registration exists from in-memory cache
       if (pending) {
         const referralCode = this.generateUniqueReferralCode(pending.name);
-        const created = databaseService.createUser({
+        const created = this.databaseService.createUser({
           id: playerId,
           telegram_id: String(telegramId),
           telegram_username: telegramUsername,
@@ -909,21 +975,12 @@ export class AuthService {
           registration_status: 'COMPLETED'
         });
 
-        databaseService.recordLedgerTransaction({
-          userId: created.id,
-          username: created.username,
-          type: 'BONUS',
-          amount: 1000.0,
-          description: 'Welcome Bonus for Phone Verification',
-          referenceId: `bonus_welcome_${created.id}`
-        });
+        const session = this.databaseService.createSession(created.id, String(telegramId));
+        const wallet = this.databaseService.getOrCreateWallet(created.id);
 
-        const session = databaseService.createSession(created.id, String(telegramId));
-        const wallet = databaseService.getOrCreateWallet(created.id);
-
-        const dbPending = databaseService.getPendingRegistrationByPhone(normalizedPhone);
+        const dbPending = this.databaseService.getPendingRegistrationByPhone(normalizedPhone);
         if (dbPending) {
-          databaseService.updatePendingRegistration(dbPending.id, {
+          this.databaseService.updatePendingRegistration(dbPending.id, {
             status: 'VERIFIED',
             telegram_user_id: String(telegramId)
           });
@@ -945,10 +1002,10 @@ export class AuthService {
       }
 
       // 1b. Check persistent database table for pending registration
-      const dbPending = databaseService.getPendingRegistrationByPhone(normalizedPhone);
+      const dbPending = this.databaseService.getPendingRegistrationByPhone(normalizedPhone);
       if (dbPending && dbPending.status !== 'EXPIRED' && dbPending.status !== 'DENIED') {
         const referralCode = this.generateUniqueReferralCode(dbPending.name);
-        const created = databaseService.createUser({
+        const created = this.databaseService.createUser({
           id: playerId,
           telegram_id: String(telegramId),
           telegram_username: telegramUsername,
@@ -962,19 +1019,10 @@ export class AuthService {
           registration_status: 'COMPLETED'
         });
 
-        databaseService.recordLedgerTransaction({
-          userId: created.id,
-          username: created.username,
-          type: 'BONUS',
-          amount: 1000.0,
-          description: 'Welcome Bonus for Phone Verification',
-          referenceId: `bonus_welcome_${created.id}`
-        });
+        const session = this.databaseService.createSession(created.id, String(telegramId));
+        const wallet = this.databaseService.getOrCreateWallet(created.id);
 
-        const session = databaseService.createSession(created.id, String(telegramId));
-        const wallet = databaseService.getOrCreateWallet(created.id);
-
-        databaseService.updatePendingRegistration(dbPending.id, {
+        this.databaseService.updatePendingRegistration(dbPending.id, {
           status: 'VERIFIED',
           telegram_user_id: String(telegramId)
         });
@@ -991,17 +1039,17 @@ export class AuthService {
       }
 
       // 2. Fallback / Direct Telegram Contact Share (user shared contact directly or server restarted)
-      let user = databaseService.getUserByPhone(normalizedPhone) || databaseService.getUserByTelegramId(String(telegramId));
+      let user = this.databaseService.getUserByPhone(normalizedPhone) || this.databaseService.getUserByTelegramId(String(telegramId));
       if (user) {
         // User already in database: ensure phone & status are updated
         if (!user.phone || user.registration_status !== 'COMPLETED') {
-          user = databaseService.updateUser(user.id, {
+          user = this.databaseService.updateUser(user.id, {
             phone: normalizedPhone,
             registration_status: 'COMPLETED'
           });
         }
-        const session = databaseService.createSession(user.id, String(telegramId));
-        const wallet = databaseService.getOrCreateWallet(user.id);
+        const session = this.databaseService.createSession(user.id, String(telegramId));
+        const wallet = this.databaseService.getOrCreateWallet(user.id);
         const userRecord: UserRecord = {
           ...user,
           playerId: user.id,
@@ -1016,12 +1064,12 @@ export class AuthService {
       const baseName = telegramUsername || `Player_${normalizedPhone.slice(-4)}`;
       let cleanUsername = baseName;
       let suffix = 1;
-      while (databaseService.getUserByUsername(cleanUsername)) {
+      while (this.databaseService.getUserByUsername(cleanUsername)) {
         cleanUsername = `${baseName}_${suffix++}`;
       }
       const referralCode = this.generateUniqueReferralCode(cleanUsername);
 
-      const created = databaseService.createUser({
+      const created = this.databaseService.createUser({
         id: playerId,
         telegram_id: String(telegramId),
         telegram_username: telegramUsername,
@@ -1033,17 +1081,8 @@ export class AuthService {
         registration_status: 'COMPLETED'
       });
 
-      databaseService.recordLedgerTransaction({
-        userId: created.id,
-        username: created.username,
-        type: 'BONUS',
-        amount: 1000.0,
-        description: 'Welcome Bonus for Phone Verification',
-        referenceId: `bonus_welcome_${created.id}`
-      });
-
-      const session = databaseService.createSession(created.id, String(telegramId));
-      const wallet = databaseService.getOrCreateWallet(created.id);
+      const session = this.databaseService.createSession(created.id, String(telegramId));
+      const wallet = this.databaseService.getOrCreateWallet(created.id);
 
       const userRecord: UserRecord = {
         ...created,
@@ -1086,10 +1125,10 @@ export class AuthService {
 
   public verifyPhone(phone: string, code?: string): AuthResponse {
     const normalized = this.normalizePhone(phone);
-    let user = databaseService.getUserByPhone(normalized);
+    let user = this.databaseService.getUserByPhone(normalized);
 
     if (!user) {
-      const pending = this.pendingRegistrations.get(normalized) || databaseService.getPendingRegistrationByPhone(normalized);
+      const pending = this.pendingRegistrations.get(normalized) || this.databaseService.getPendingRegistrationByPhone(normalized);
       if (pending) {
         const tgId = (pending as any).telegramId || (pending as any).telegram_user_id || code || `88${normalized.replace(/\D/g, '')}`;
         return this.completeTelegramRegistrationShare(
@@ -1101,8 +1140,8 @@ export class AuthService {
       return { success: false, error: 'User not found or phone not verified via Telegram' };
     }
 
-    const wallet = databaseService.getOrCreateWallet(user.id);
-    const session = databaseService.createSession(user.id, user.telegram_id);
+    const wallet = this.databaseService.getOrCreateWallet(user.id);
+    const session = this.databaseService.createSession(user.id, user.telegram_id);
 
     return {
       success: true,
@@ -1120,20 +1159,20 @@ export class AuthService {
 
   public checkVerification(phone: string) {
     const normalized = this.normalizePhone(phone);
-    const user = databaseService.getUserByPhone(normalized);
+    const user = this.databaseService.getUserByPhone(normalized);
     return {
       isVerified: Boolean(user && user.registration_status === 'COMPLETED'),
       user: user ? {
         playerId: user.id,
         username: user.username,
-        walletBalance: databaseService.getOrCreateWallet(user.id).balance
+        walletBalance: this.databaseService.getOrCreateWallet(user.id).balance
       } : null
     };
   }
 
   public initiatePasswordReset(phone: string) {
     const normalized = this.normalizePhone(phone);
-    const user = databaseService.getUserByPhone(normalized);
+    const user = this.databaseService.getUserByPhone(normalized);
     if (!user) return { success: false, error: 'No account found with this phone number.' };
 
     const resetToken = `reset_${crypto.randomBytes(16).toString('hex')}`;
@@ -1188,33 +1227,116 @@ export class AuthService {
 
   public completePasswordReset(phone: string, resetToken: string, newPass: string) {
     const normalized = this.normalizePhone(phone);
+    if (!normalized) {
+      return { success: false, error: 'Invalid phone number.' };
+    }
+
     const req = this.passwordResetRequests.get(normalized);
-    if (!req || req.resetToken !== resetToken || req.status !== 'verified') {
+    if (!req) {
+      return { success: false, error: 'Password reset request not found.' };
+    }
+
+    // Expiration check (15 minutes TTL)
+    if (req.createdAt && (Date.now() - req.createdAt > 15 * 60 * 1000)) {
+      this.passwordResetRequests.delete(normalized);
+      return { success: false, error: 'Password reset request has expired. Please initiate again.' };
+    }
+
+    // Must be verified via Telegram contact share
+    if (req.status !== 'verified') {
+      return { success: false, error: 'Password reset has not been verified via Telegram.' };
+    }
+
+    // Safe constant-time token comparison
+    const tokenBuf = Buffer.from(resetToken || '');
+    const reqBuf = Buffer.from(req.resetToken || '');
+    if (!resetToken || tokenBuf.length !== reqBuf.length || !crypto.timingSafeEqual(tokenBuf, reqBuf)) {
       return { success: false, error: 'Invalid or unverified reset token.' };
     }
 
+    // Enforce password policy: minimum 6 characters
+    if (!newPass || newPass.length < 6) {
+      return { success: false, error: 'Password must be at least 6 characters.' };
+    }
+
+    const user = this.databaseService.getUserByPhone(normalized);
+    if (!user) {
+      return { success: false, error: 'No user account found for this phone number.' };
+    }
+
+    // Hash the new password using Scrypt + CSPRNG salt
+    const { hash, salt } = hashPassword(newPass);
+    this.databaseService.updateUser(user.id, {
+      password_hash: hash,
+      password_salt: salt
+    });
+
+    // Revoke all existing sessions for this user across all devices
+    this.databaseService.revokeAllUserSessions(user.id);
+
+    // Consume the reset request so token cannot be reused
     this.passwordResetRequests.delete(normalized);
+
     return { success: true, message: 'Password updated successfully' };
   }
 
   public login(phone: string, pass: string): AuthResponse {
-    const normalized = this.normalizePhone(phone);
-    const user = databaseService.getUserByPhone(normalized);
-    if (!user) return { success: false, error: 'Invalid phone number or password' };
+    const normalized = normalizeEthiopianPhone(phone);
+    if (!normalized) {
+      console.warn(`[Auth] AUTH_LOGIN_FAILED reason=INVALID_PHONE_FORMAT input=${maskPhone(phone)}`);
+      return { success: false, error: 'Invalid phone number or password.' };
+    }
 
-    if (user.password_hash) {
-      const computed = this.hashPassword(pass, user.password_salt || '');
-      if (computed !== user.password_hash) {
-        return { success: false, error: 'Invalid phone number or password' };
-      }
-    } else {
-      if (pass !== 'password123') {
-        return { success: false, error: 'Invalid phone number or password' };
+    const rateCheck = authRateLimiter.isRateLimited(normalized);
+    if (rateCheck.limited) {
+      return {
+        success: false,
+        error: `Too many login attempts. Please wait ${rateCheck.retryAfterSeconds || 60} seconds and try again.`
+      };
+    }
+
+    const user = this.databaseService.getUserByPhone(normalized);
+    if (!user) {
+      authRateLimiter.recordFailure(normalized);
+      console.warn(`[Auth] AUTH_LOGIN_FAILED reason=USER_NOT_FOUND phone=${maskPhone(normalized)}`);
+      return { success: false, error: 'Invalid phone number or password.' };
+    }
+
+    if (user.account_status === 'SUSPENDED' || user.account_status === 'BANNED') {
+      console.warn(`[Auth] AUTH_LOGIN_FAILED reason=ACCOUNT_${user.account_status} userId=${user.id}`);
+      return { success: false, error: 'Account is suspended. Please contact support.' };
+    }
+
+    const verifyResult = verifyPassword(pass, user.password_hash, user.password_salt);
+    if (!verifyResult.isValid) {
+      authRateLimiter.recordFailure(normalized);
+      console.warn(`[Auth] AUTH_LOGIN_FAILED reason=PASSWORD_MISMATCH phone=${maskPhone(normalized)}`);
+      return { success: false, error: 'Invalid phone number or password.' };
+    }
+
+    // Reset rate limiter on successful login
+    authRateLimiter.reset(normalized);
+
+    // Transparent progressive upgrade: re-hash legacy password using Scrypt
+    if (verifyResult.needsRehash) {
+      try {
+        const { hash, salt } = hashPassword(pass);
+        this.databaseService.updateUser(user.id, {
+          password_hash: hash,
+          password_salt: salt
+        });
+        console.log(`[Auth] Transparently upgraded password hash to Scrypt for user ${user.id}`);
+      } catch (err) {
+        console.warn('[Auth] Warning upgrading password hash:', err);
       }
     }
 
-    const session = databaseService.createSession(user.id, user.telegram_id);
-    const wallet = databaseService.getOrCreateWallet(user.id);
+    this.databaseService.updateUser(user.id, {
+      last_login_at: new Date().toISOString()
+    });
+
+    const session = this.databaseService.createSession(user.id, user.telegram_id);
+    const wallet = this.databaseService.getOrCreateWallet(user.id);
 
     return {
       success: true,
@@ -1223,9 +1345,12 @@ export class AuthService {
         username: user.username,
         walletBalance: wallet.balance,
         avatarUrl: user.avatar_url,
-        isBot: Boolean(user.is_bot)
+        isBot: Boolean(user.is_bot),
+        role: user.role,
+        account_status: user.account_status
       },
       token: session.id,
+      sessionToken: session.id,
       requiresVerification: false
     };
   }
@@ -1233,7 +1358,7 @@ export class AuthService {
   public telegramLogin(telegramData: { id: string | number; username?: string; first_name?: string; last_name?: string; photo_url?: string }): AuthResponse {
     const telegramId = String(telegramData.id);
     const playerId = `tg_${telegramId}`;
-    let user = databaseService.getUserByTelegramId(telegramId);
+    let user = this.databaseService.getUserByTelegramId(telegramId);
 
     // Security check: NEVER permit admin login through unverified 1-tap fallback
     const adminIds = (process.env.ADMIN_TELEGRAM_IDS || '').split(',').map(s => s.trim());
@@ -1249,7 +1374,7 @@ export class AuthService {
       : telegramData.username || 'TelegramPlayer';
 
     if (!user) {
-      user = databaseService.createUser({
+      user = this.databaseService.createUser({
         id: playerId,
         telegram_id: telegramId,
         telegram_username: telegramData.username,
@@ -1259,18 +1384,10 @@ export class AuthService {
         role: 'USER',
         avatar_url: telegramData.photo_url || ''
       });
-      databaseService.recordLedgerTransaction({
-        userId: playerId,
-        username: displayName,
-        type: 'BONUS',
-        amount: 1000.0,
-        description: 'Welcome Bonus',
-        referenceId: `bonus_welcome_${playerId}`
-      });
     }
 
-    const session = databaseService.createSession(user.id, telegramId);
-    const wallet = databaseService.getOrCreateWallet(user.id);
+    const session = this.databaseService.createSession(user.id, telegramId);
+    const wallet = this.databaseService.getOrCreateWallet(user.id);
 
     return {
       success: true,
@@ -1292,26 +1409,65 @@ export class AuthService {
   }
 
   public register(name: string, phone: string, pass: string): AuthResponse {
-    const res = this.initiateRegistration(name, phone, pass);
-    if (!res.success) return res as any;
+    if (!name || name.trim().length < 2) {
+      return { success: false, error: 'Please enter a valid full name (minimum 2 characters).' };
+    }
+    const normalizedPhone = normalizeEthiopianPhone(phone);
+    if (!normalizedPhone) {
+      return { success: false, error: 'Please enter a valid Ethiopian phone number (e.g. 0912345678 or +251912345678).' };
+    }
+    if (!pass || pass.length < 6) {
+      return { success: false, error: 'Password must be at least 6 characters.' };
+    }
+
+    const existing = this.databaseService.getUserByPhone(normalizedPhone);
+    if (existing) {
+      return { success: false, error: 'An account with this phone number already exists. Please log in.' };
+    }
+
+    const cleanName = name.trim();
+    const userId = `usr_${crypto.randomUUID().replace(/-/g, '')}`;
+    const referralCode = this.generateUniqueReferralCode(cleanName);
+    const { hash, salt } = hashPassword(pass);
+
+    const created = this.databaseService.createUser({
+      id: userId,
+      telegram_id: `phone_${normalizedPhone}`,
+      username: cleanName,
+      phone: normalizedPhone,
+      password_hash: hash,
+      password_salt: salt,
+      referral_code: referralCode,
+      role: 'USER',
+      account_status: 'ACTIVE',
+      registration_status: 'COMPLETED'
+    });
+
+    const session = this.databaseService.createSession(created.id, created.telegram_id);
+    const wallet = this.databaseService.getOrCreateWallet(created.id);
+
     return {
       success: true,
-      requiresVerification: true,
-      phone: res.phone,
-      token: res.pendingId,
       user: {
-        playerId: `pending_${res.pendingId}`,
-        username: name,
-        walletBalance: 0
-      }
+        playerId: created.id,
+        username: created.username,
+        walletBalance: wallet.balance,
+        avatarUrl: created.avatar_url,
+        isBot: false,
+        role: created.role,
+        account_status: created.account_status
+      },
+      token: session.id,
+      sessionToken: session.id,
+      requiresVerification: false
     };
   }
 
   public getFullProfile(playerId: string) {
     const user = this.getUserById(playerId);
     if (!user) return null;
-    const wallet = databaseService.getOrCreateWallet(user.id);
-    const stats = databaseService.getUserStats(user.id);
+    const wallet = this.databaseService.getOrCreateWallet(user.id);
+    const stats = this.databaseService.getUserStats(user.id);
 
     return {
       id: user.id,
@@ -1331,6 +1487,8 @@ export class AuthService {
       created_at: user.created_at,
       walletBalance: wallet.balance,
       reservedBalance: wallet.reserved_balance,
+      bonusBalance: wallet.bonus_balance || 0,
+      totalPlayableBalance: Math.round(((wallet.balance || 0) + (wallet.bonus_balance || 0)) * 100) / 100,
       totalGamesPlayed: stats.totalGames,
       totalWonETB: stats.totalWon,
       currentStreak: stats.currentStreak,

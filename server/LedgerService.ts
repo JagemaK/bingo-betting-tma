@@ -11,6 +11,8 @@ export interface UserAccount {
   username: string;
   walletBalance: number;
   reservedBalance?: number;
+  bonusBalance?: number;
+  totalPlayableBalance?: number;
   avatarUrl?: string;
   isBot?: boolean;
   registration_status?: string;
@@ -27,7 +29,8 @@ export type LedgerTransactionType =
   | 'refund'
   | 'bonus'
   | 'loss'
-  | 'adjustment';
+  | 'adjustment'
+  | 'escrow_hold';
 
 export interface LedgerEntry {
   id: string;
@@ -96,6 +99,7 @@ export class LedgerService {
       case 'BONUS': return 'bonus';
       case 'LOSS': return 'loss';
       case 'ADMIN_ADJUSTMENT': return 'adjustment';
+      case 'ESCROW_HOLD': return 'escrow_hold';
       default: return 'adjustment';
     }
   }
@@ -119,6 +123,8 @@ export class LedgerService {
     if (!userRow) return undefined;
 
     const wallet = databaseService.getOrCreateWallet(playerId);
+    const bonusBalance = wallet.bonus_balance || 0.0;
+    const totalPlayableBalance = Number(((wallet.balance || 0) + bonusBalance).toFixed(2));
     return {
       id: userRow.id,
       playerId: userRow.id,
@@ -127,6 +133,8 @@ export class LedgerService {
       username: userRow.username,
       walletBalance: wallet.balance,
       reservedBalance: wallet.reserved_balance,
+      bonusBalance,
+      totalPlayableBalance,
       avatarUrl: userRow.avatar_url,
       isBot: Boolean(userRow.is_bot),
       registration_status: userRow.registration_status,
@@ -141,7 +149,7 @@ export class LedgerService {
     username: string,
     avatarUrl?: string,
     role: UserRole = 'USER',
-    initialBalance: number = 1000.00
+    initialBalance: number = 0.00
   ): UserAccount {
     let existing = this.getUser(playerId);
     if (existing) {
@@ -283,8 +291,8 @@ export class LedgerService {
   public async approveDeposit(
     adminId: string,
     depositId: string
-  ): Promise<{ deposit: DepositRequest; entry: LedgerEntry }> {
-    const { deposit, entry } = databaseService.approveDeposit(adminId, depositId);
+  ): Promise<{ deposit: DepositRequest; entry: LedgerEntry; promotionalBonus?: any }> {
+    const { deposit, entry, promotionalBonus } = databaseService.approveDeposit(adminId, depositId);
     return {
       deposit: {
         id: deposit.id,
@@ -310,7 +318,8 @@ export class LedgerService {
         referenceId: entry.reference_id,
         description: entry.description,
         timestamp: entry.created_at
-      }
+      },
+      promotionalBonus
     };
   }
 

@@ -108,12 +108,17 @@ export class TelegramSdkService {
         const tgWebAppData = urlParams.get('tgWebAppData');
         if (tgWebAppData) return tgWebAppData;
       }
-      // Check hash fragment for tgWebAppData
+      // Check hash fragment for tgWebAppData or direct initData parameters
       if (window.location.hash) {
         const hash = window.location.hash.substring(1);
         const hashParams = new URLSearchParams(hash);
         const tgWebAppData = hashParams.get('tgWebAppData');
         if (tgWebAppData) return tgWebAppData;
+
+        // Telegram Web & Desktop sometimes pass query string directly in hash (e.g. #query_id=...&user=...&hash=...)
+        if (hashParams.has('hash') && (hashParams.has('user') || hashParams.has('query_id') || hashParams.has('auth_date'))) {
+          return hash;
+        }
       }
     }
     return '';

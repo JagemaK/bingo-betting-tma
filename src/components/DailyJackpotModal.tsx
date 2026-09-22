@@ -65,7 +65,7 @@ export const DailyJackpotModal: React.FC<DailyJackpotModalProps> = ({
     setErrorMsg(null);
     try {
       const headers: Record<string, string> = {};
-      const token = localStorage.getItem('token') || localStorage.getItem('session_token');
+      const token = localStorage.getItem('bingo_auth_token') || localStorage.getItem('token');
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
       const [resState, resCards] = await Promise.all([
@@ -160,7 +160,7 @@ export const DailyJackpotModal: React.FC<DailyJackpotModalProps> = ({
     setSuccessMsg(null);
 
     try {
-      const token = localStorage.getItem('token') || localStorage.getItem('session_token');
+      const token = localStorage.getItem('bingo_auth_token') || localStorage.getItem('token');
       const res = await fetch(apiUrl('/api/daily-jackpot/purchase'), {
         method: 'POST',
         headers: {
@@ -291,7 +291,7 @@ export const DailyJackpotModal: React.FC<DailyJackpotModalProps> = ({
                 <span>GUARANTEED CHAMPION PAYOUT</span>
               </div>
               <div className="font-arcade text-3xl sm:text-4xl font-black text-amber-300 drop-shadow-[0_0_20px_rgba(245,158,11,0.6)]">
-                {(jackpotData?.jackpotAmount || 100000).toLocaleString()} BIRR
+                {(jackpotData?.jackpotAmount && jackpotData.jackpotAmount > 150000 ? jackpotData.jackpotAmount : 150000).toLocaleString()} BIRR
               </div>
               <p className="text-xs text-white/50">
                 100% Pari-Mutuel winner payout on 75-Ball Full House / Line BINGO

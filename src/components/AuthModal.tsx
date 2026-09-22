@@ -79,20 +79,19 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const isInsideTg =
     telegramSdk.isInsideTelegram() ||
     Boolean(telegramSdk.getInitData()) ||
+    Boolean(auth.telegramUser);
+
+  const hasTelegramTempSession =
     Boolean(auth.tempToken) ||
-    Boolean(auth.telegramUser) ||
     auth.status === 'NEW_USER' ||
     auth.status === 'REGISTRATION_REQUIRED';
 
   React.useEffect(() => {
     if (isOpen) {
       telegramSdk.logDiagnostics();
-      console.log('[AuthModal] Opened. isInsideTg:', isInsideTg, 'initialMode:', initialMode, 'authStatus:', auth.status);
-      if (isInsideTg && (initialMode === 'register' || initialMode === 'tg_register' || initialMode === 'teaser')) {
+      console.log('[AuthModal] Opened. isInsideTg:', isInsideTg, 'hasTelegramTempSession:', hasTelegramTempSession, 'initialMode:', initialMode, 'authStatus:', auth.status);
+      if (initialMode === 'tg_register' || (hasTelegramTempSession && (initialMode === 'register' || initialMode === 'teaser'))) {
         setMode('tg_register');
-        if (auth.status === 'UNINITIALIZED' || auth.status === 'UNAUTHENTICATED') {
-          auth.initAuth();
-        }
       } else {
         setMode(initialMode);
       }
@@ -102,21 +101,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       if (auth.suggestedUsername) setTgUsername(auth.suggestedUsername);
       if (auth.referralCode) setTgReferralCode(auth.referralCode);
     }
-  }, [isOpen, initialMode, auth.suggestedUsername, auth.referralCode, isInsideTg]);
-
-  // Guard: if inside Telegram, ensure mode is tg_register rather than register
-  React.useEffect(() => {
-    if (isOpen && isInsideTg && (mode === 'register' || mode === 'teaser')) {
-      setMode('tg_register');
-    }
-  }, [isOpen, isInsideTg, mode]);
+  }, [isOpen, initialMode, auth.suggestedUsername, auth.referralCode, hasTelegramTempSession]);
 
   React.useEffect(() => {
-    if (isOpen && isInsideTg && !auth.tempToken && auth.status !== 'AUTHENTICATED' && auth.status !== 'AUTHENTICATING') {
+    if (isOpen && mode === 'tg_register' && !auth.tempToken && auth.status !== 'AUTHENTICATED' && auth.status !== 'AUTHENTICATING') {
       console.log('[AuthModal] Triggering initAuth in tg_register mode');
       auth.initAuth();
     }
-  }, [isOpen, isInsideTg, auth.tempToken, auth.status]);
+  }, [isOpen, mode, auth.tempToken, auth.status]);
 
   React.useEffect(() => {
     if (auth.suggestedUsername && !tgUsername) {
@@ -142,14 +134,33 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       socket.emit('SUBSCRIBE_PASSWORD_RESET', { phone: targetPhone });
     }
 
-    const handleRegSuccess = (data: { phone: string; user: UserAccount; token?: string }) => {
+    const handleRegSuccess = async (data: { phone?: string; user?: UserAccount; token?: string; status?: string }) => {
       if (mode !== 'verify') return;
       const target = pendingPhone || phone;
-      if (!target || data.phone.endsWith(target.slice(-8))) {
+      if (!target || (data.phone && data.phone.endsWith(target.slice(-8)))) {
+        if (!data.token && target) {
+          try {
+            const res = await fetch(apiUrl(`/api/auth/registration-status/${target}`));
+            if (res.ok) {
+              const fetched = await res.json();
+              if (fetched.status === 'verified' && fetched.user) {
+                if (fetched.token) localStorage.setItem('bingo_auth_token', fetched.token);
+                soundService.playJackpotFanfare();
+                telegramSdk.triggerHaptic('success');
+                onSuccess(fetched.user, fetched.token || '');
+                setDeniedReason(null);
+                setMode('welcome');
+                return;
+              }
+            }
+          } catch (e) {
+            // fallback to interval poller
+          }
+        }
         if (data.token) localStorage.setItem('bingo_auth_token', data.token);
         soundService.playJackpotFanfare();
         telegramSdk.triggerHaptic('success');
-        onSuccess(data.user, data.token || '');
+        if (data.user) onSuccess(data.user, data.token || '');
         setDeniedReason(null);
         setMode('welcome');
       }
@@ -167,14 +178,34 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       }
     };
 
-    const handleResetAuthorized = (data: { phone: string; resetToken: string }) => {
+    const handleResetAuthorized = async (data: { phone?: string; resetToken?: string; status?: string }) => {
       const target = pendingPhone || phone;
-      if (!target || data.phone.endsWith(target.slice(-8))) {
-        setResetToken(data.resetToken);
-        soundService.playLineChime();
-        telegramSdk.triggerHaptic('success');
-        setDeniedReason(null);
-        setMode('new_password');
+      if (!target || (data.phone && data.phone.endsWith(target.slice(-8)))) {
+        if (!data.resetToken && target) {
+          try {
+            const res = await fetch(apiUrl(`/api/auth/forgot-password-status/${target}`));
+            if (res.ok) {
+              const fetched = await res.json();
+              if (fetched.status === 'authorized' && fetched.resetToken) {
+                setResetToken(fetched.resetToken);
+                soundService.playLineChime();
+                telegramSdk.triggerHaptic('success');
+                setDeniedReason(null);
+                setMode('new_password');
+                return;
+              }
+            }
+          } catch (e) {
+            // fallback to interval poller
+          }
+        }
+        if (data.resetToken) {
+          setResetToken(data.resetToken);
+          soundService.playLineChime();
+          telegramSdk.triggerHaptic('success');
+          setDeniedReason(null);
+          setMode('new_password');
+        }
       }
     };
 
@@ -298,7 +329,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     telegramSdk.triggerHaptic('medium');
 
     try {
-      const res = await fetch(apiUrl('/api/auth/register-initiate'), {
+      const res = await fetch(apiUrl('/api/auth/register'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -310,18 +341,19 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
       const data = await res.json();
       if (!res.ok || !data.success) {
-        setErrorMessage(data.error || 'Registration request failed');
+        setErrorMessage(data.error || 'Registration failed. Please check your information.');
         setIsLoading(false);
         return;
       }
 
-      setPendingPhone(data.phone || phone.trim());
-      if (data.botUsername) setBotUsername(data.botUsername);
-      if (data.botUrl) setBotDeepLink(data.botUrl);
-      setDeniedReason(null);
-      setMode('verify');
-      soundService.playClick();
+      if (data.token) {
+        localStorage.setItem('bingo_auth_token', data.token);
+      }
+      soundService.playJackpotFanfare();
       telegramSdk.triggerHaptic('success');
+      onSuccess(data.user, data.token || '');
+      setDeniedReason(null);
+      setMode('welcome');
     } catch (err: any) {
       setErrorMessage(err.message || 'Network error. Please try again.');
     } finally {
@@ -713,6 +745,72 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 <p className="text-xs font-bold text-white uppercase tracking-wider">Verifying Telegram Identity...</p>
                 <p className="text-[11px] text-white/50">Securing your account with Telegram initData</p>
               </div>
+            ) : !auth.tempToken ? (
+              <div className="space-y-4 py-3 text-center animate-fadeIn">
+                <div className="w-12 h-12 mx-auto rounded-2xl bg-[#0088cc]/20 border border-[#0088cc]/40 flex items-center justify-center text-[#0088cc]">
+                  <Bot className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-white uppercase tracking-wider">
+                    TELEGRAM MINI APP
+                  </h3>
+                  <p className="text-[11px] text-white/60 mt-1">
+                    Tap below to connect your Telegram identity, or sign in directly with your Ethiopian phone number.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    soundService.playClick();
+                    auth.initAuth();
+                  }}
+                  className="btn-neon w-full py-2.5 rounded-xl text-xs font-black uppercase tracking-wide flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  <span>REFRESH TELEGRAM AUTH</span>
+                </button>
+
+                <div className="flex items-center gap-2 my-2 text-[10px] text-white/40 font-bold">
+                  <div className="flex-1 h-px bg-white/10" />
+                  <span>OR CONTINUE WITH PHONE</span>
+                  <div className="flex-1 h-px bg-white/10" />
+                </div>
+
+                <div className="space-y-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      soundService.playClick();
+                      setMode('register');
+                      setErrorMessage(null);
+                    }}
+                    className="w-full py-2.5 rounded-xl text-xs font-arcade font-bold bg-[#1a1a1a] hover:bg-[#242424] border border-white/10 text-white flex items-center justify-center gap-2 cursor-pointer transition-all"
+                  >
+                    <span>CREATE ACCOUNT WITH PHONE</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      soundService.playClick();
+                      setMode('login');
+                      setErrorMessage(null);
+                    }}
+                    className="w-full py-2 rounded-xl text-xs font-arcade text-white/70 hover:text-white flex items-center justify-center gap-1 cursor-pointer"
+                  >
+                    <span>Already have an account? <strong className="text-[#E8FF00]">Log In</strong></span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleGuestPlay}
+                    className="w-full py-1 text-[11px] font-arcade text-white/40 hover:text-white cursor-pointer"
+                  >
+                    ⚡ Play as Guest (Instant)
+                  </button>
+                </div>
+              </div>
             ) : (
             <form onSubmit={handleTgRegisterSubmit} className="space-y-4 py-1 animate-fadeIn">
               <div className="text-center space-y-1">
@@ -798,6 +896,46 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   </>
                 )}
               </button>
+
+              {/* Alternative Options */}
+              <div className="pt-2 text-center text-[11px] text-white/60 space-y-1.5 border-t border-white/10">
+                <div>
+                  Already have an account?{' '}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      soundService.playClick();
+                      setMode('login');
+                      setErrorMessage(null);
+                    }}
+                    className="text-[#E8FF00] font-black hover:underline cursor-pointer"
+                  >
+                    Log In with Phone & Password
+                  </button>
+                </div>
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      soundService.playClick();
+                      setMode('register');
+                      setErrorMessage(null);
+                    }}
+                    className="text-white/70 hover:text-white underline cursor-pointer"
+                  >
+                    Or Register with Ethiopian Phone Number
+                  </button>
+                </div>
+                <div>
+                  <button
+                    type="button"
+                    onClick={handleGuestPlay}
+                    className="text-white/40 hover:text-white text-[10px] cursor-pointer"
+                  >
+                    ⚡ Play as Guest
+                  </button>
+                </div>
+              </div>
             </form>
             )
           )}
@@ -827,7 +965,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               <button
                 onClick={() => {
                   soundService.playClick();
-                  setMode(isInsideTg ? 'tg_register' : 'register');
+                  setMode(hasTelegramTempSession ? 'tg_register' : 'register');
                 }}
                 className="btn-neon w-full py-3 rounded-xl text-xs font-black uppercase tracking-wide flex items-center justify-center gap-1.5 cursor-pointer"
               >
@@ -850,8 +988,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             </div>
           )}
 
-          {/* 2. REGISTER MODE (Fallback for users outside Telegram) */}
-          {mode === 'register' && !isInsideTg && (
+          {/* 2. REGISTER MODE (Direct Phone Sign-up) */}
+          {mode === 'register' && (
             <form onSubmit={handleRegisterSubmit} className="space-y-3">
               <div>
                 <h2 className="text-sm font-black text-white uppercase">Create Account</h2>
@@ -859,6 +997,21 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   Sign up with your phone number and get an instant 1,000 Birr bonus.
                 </p>
               </div>
+
+              {/* Quick Telegram Connect Option if inside Telegram */}
+              {isInsideTg && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    soundService.playClick();
+                    auth.initAuth();
+                  }}
+                  className="w-full py-2 rounded-xl text-[11px] font-bold bg-[#0088cc]/15 hover:bg-[#0088cc]/25 border border-[#0088cc]/30 text-[#0088cc] flex items-center justify-center gap-2 cursor-pointer transition-all"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>CONNECT TELEGRAM ACCOUNT</span>
+                </button>
+              )}
 
               {/* Guest Instant Play */}
               <button

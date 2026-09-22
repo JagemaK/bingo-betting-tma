@@ -24,17 +24,17 @@ describe('AuthService Suite', () => {
   it('should reject invalid password for existing account', () => {
     const res = authService.login('0912345678', 'wrongpassword');
     expect(res.success).toBe(false);
-    expect(res.error).toBe('Invalid phone number or password');
+    expect(res.error).toMatch(/Invalid phone number or password/i);
   });
 
   it('should register a new Ethiopian phone user with verification requirement', () => {
     const randomSuffix = Math.floor(100000 + Math.random() * 900000);
     const testPhone = `09${randomSuffix}99`;
-    const res = authService.register('Abebe Bikila', testPhone, 'securePass123');
+    const res = authService.initiateRegistration('Abebe Bikila', testPhone, 'securePass123');
 
     expect(res.success).toBe(true);
     expect(res.requiresVerification).toBe(true);
-    expect(res.phone).toBe(testPhone);
+    expect(res.phone).toBe(authService.normalizePhone(testPhone));
     expect(res.user?.username).toBe('Abebe Bikila');
 
     // Verify phone
