@@ -137,6 +137,10 @@ app.post('/api/telegram/webhook', async (req, res) => {
 
 // Simulation endpoint for browser testing & automated test suite
 app.post('/api/telegram/simulate-contact-share', (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(403).json({ error: 'Simulation endpoints are permanently disabled in production' });
+  }
+
   const { phone, expectedPhone, sharedPhone, tgUserId, username, isReset } = req.body;
   const targetExpected = expectedPhone || phone;
   if (!targetExpected) {
@@ -795,18 +799,28 @@ app.get('/api/referral/:playerId?', optionalSession, (req: any, res) => {
   });
 });
 
-// Claim Referral Earnings
-app.post('/api/referral/claim', optionalSession, async (req: any, res) => {
+// Claim Referral Earnings (Authenticated & Idempotent)
+app.post('/api/referral/claim', authenticateSession, async (req: any, res) => {
   const currentUserId = req.user?.playerId;
   const { playerId } = req.body;
 
-  if (currentUserId && playerId && playerId !== currentUserId) {
+  if (playerId && playerId !== currentUserId) {
     return res.status(403).json({ error: 'Access denied: Cannot claim earnings for another user' });
   }
 
-  const targetPlayerId = currentUserId || playerId;
+  const targetPlayerId = currentUserId;
   if (!targetPlayerId) {
     return res.status(401).json({ error: 'Authentication required' });
+  }
+
+  // Idempotency: Verify user has not already claimed their referral commission payout
+  const claimRefId = `ref_claim_${targetPlayerId}`;
+  const existingClaim = databaseService.getLedgerTransactionByReference(claimRefId);
+  if (existingClaim) {
+    return res.status(400).json({
+      error: 'Referral commission has already been claimed',
+      claimedAmountETB: 0
+    });
   }
 
   try {
@@ -814,7 +828,10 @@ app.post('/api/referral/claim', optionalSession, async (req: any, res) => {
       targetPlayerId,
       'deposit',
       150.00,
-      'Affiliate Referral Commission Payout (150 Birr)'
+      'Affiliate Referral Commission Payout (150 Birr)',
+      undefined,
+      undefined,
+      claimRefId
     );
     const user = ledgerService.getUser(targetPlayerId);
     res.json({ success: true, entry, user, claimedAmountETB: 150, claimedAmount: 150 });
@@ -1290,6 +1307,8 @@ io.on('connection', (socket) => {
       }
 
       const { roomId, count = 1 } = data;
+      // DoS Protection: Ensure count is bounded to a safe positive integer (max 20 cards)
+      const safeCount = Math.min(Math.max(1, Math.floor(Number(count) || 1)), 20);
       const room = multiRoomManager.getRoom(roomId);
       if (!room) {
         if (typeof callback === 'function') callback({ success: false, error: 'Room not found' });
@@ -1297,7 +1316,7 @@ io.on('connection', (socket) => {
       }
 
       const tickets = [];
-      for (let i = 0; i < count; i++) {
+      for (let i = 0; i < safeCount; i++) {
         const ticket = await room.pickRandomCardForUser(user.playerId, user.username);
         tickets.push(ticket);
       }

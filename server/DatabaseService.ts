@@ -1219,6 +1219,18 @@ export class DatabaseService {
     return stmt.get(ticketId) as TicketRow | undefined;
   }
 
+  public deletePlayerTicket(gameId: string, cardNumber: number): boolean {
+    const stmt = this.db.prepare('DELETE FROM player_tickets WHERE game_id = ? AND card_number = ?');
+    const result = stmt.run(gameId, cardNumber);
+    return result.changes > 0;
+  }
+
+  public deletePlayerTicketById(ticketId: string): boolean {
+    const stmt = this.db.prepare('DELETE FROM player_tickets WHERE id = ?');
+    const result = stmt.run(ticketId);
+    return result.changes > 0;
+  }
+
   public getActiveOrLobbyGames(roomId?: string): GameRow[] {
     if (roomId) {
       const stmt = this.db.prepare("SELECT * FROM games WHERE room_id = ? AND status IN ('lobby', 'active')");

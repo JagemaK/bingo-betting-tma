@@ -508,6 +508,9 @@ export class GameRoom {
     let cashPaid = this.config.betPerCard;
     let bonusConsumedRecords: Array<{ rewardId: string; amount: number }> = [];
 
+    const fingerprintHash = computeTicketFingerprint(grid, playerId, this.gameId, this.serverSecret);
+    const ticketId = `tkt_c${cardNumber}_${Date.now().toString().slice(-5)}`;
+
     if (!isBot) {
       databaseService.transaction(() => {
         const split = databaseService.rewardService.consumeBonusForPurchase(
@@ -543,11 +546,34 @@ export class GameRoom {
           desc,
           new Date().toISOString()
         );
-      });
-    }
 
-    const fingerprintHash = computeTicketFingerprint(grid, playerId, this.gameId, this.serverSecret);
-    const ticketId = `tkt_c${cardNumber}_${Date.now().toString().slice(-5)}`;
+        databaseService.createPlayerTicket({
+          id: ticketId,
+          gameId: this.gameId,
+          cardNumber,
+          userId: playerId,
+          username,
+          gridJson: JSON.stringify(grid),
+          fingerprintHash,
+          isBot
+        });
+      });
+    } else {
+      try {
+        databaseService.createPlayerTicket({
+          id: ticketId,
+          gameId: this.gameId,
+          cardNumber,
+          userId: playerId,
+          username,
+          gridJson: JSON.stringify(grid),
+          fingerprintHash,
+          isBot
+        });
+      } catch (e) {
+        // Ignore in mock/unit contexts
+      }
+    }
 
     const ticket: PurchasedTicket = {
       ticketId,
@@ -565,22 +591,6 @@ export class GameRoom {
 
     this.tickets.set(ticketId, ticket);
     this.cardToTicketMap.set(cardNumber, ticket);
-
-    // Persist ticket in database
-    try {
-      databaseService.createPlayerTicket({
-        id: ticketId,
-        gameId: this.gameId,
-        cardNumber,
-        userId: playerId,
-        username,
-        gridJson: JSON.stringify(grid),
-        fingerprintHash,
-        isBot
-      });
-    } catch (e) {
-      // Ignore in mock/unit contexts
-    }
 
     // Rule: The game countdown starts after it reaches 5 cards selected, giving 20 seconds waiting time
     if (this.tickets.size >= 5 && !this.isCountdownActive) {
@@ -648,8 +658,11 @@ export class GameRoom {
       this.lobbyTimeRemaining = 20;
     }
 
-    if (!ticket.isBot) {
-      databaseService.transaction(() => {
+    databaseService.transaction(() => {
+      // Remove ticket from persistent database to prevent unique constraint collisions and ghost records
+      databaseService.deletePlayerTicket(this.gameId, cardNumber);
+
+      if (!ticket.isBot) {
         databaseService.rewardService.refundPurchase(
           playerId,
           ticket.bonusPaid || 0,
@@ -680,8 +693,8 @@ export class GameRoom {
           desc,
           new Date().toISOString()
         );
-      });
-    }
+      }
+    });
 
     this.broadcastState();
     return true;

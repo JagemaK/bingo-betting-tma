@@ -79,21 +79,6 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
     telegramSdk.triggerHaptic('success');
     setClaimedDays((prev) => [...prev, day]);
     setClaimedSuccess(`Claimed Day ${day} Streak Reward: +${amount} Birr!`);
-
-    // Credit user
-    if (user) {
-      try {
-        const res = await fetch(apiUrl('/api/wallet/deposit'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ playerId: user.playerId, amount, paymentMethod: 'STREAK_REWARD' })
-        });
-        const data = await res.json();
-        if (data.success && data.user) onUpdateUser(data.user);
-      } catch (e) {
-        console.error(e);
-      }
-    }
   };
 
   const handleClaimMission = async (missionId: number, reward: number) => {
@@ -103,29 +88,19 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
       prev.map((m) => (m.id === missionId ? { ...m, claimed: true } : m))
     );
     setClaimedSuccess(`Mission Complete! Claimed +${reward} Birr!`);
-
-    if (user) {
-      try {
-        const res = await fetch(apiUrl('/api/wallet/deposit'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ playerId: user.playerId, amount: reward, paymentMethod: 'MISSION_REWARD' })
-        });
-        const data = await res.json();
-        if (data.success && data.user) onUpdateUser(data.user);
-      } catch (e) {
-        console.error(e);
-      }
-    }
   };
 
   const handleClaimAffiliate = async () => {
-    if (!user?.playerId || !stats || stats.pendingClaimUSD <= 0) return;
+    if (!user?.playerId || !stats || (stats.pendingClaimUSD <= 0 && stats.pendingClaimETB <= 0)) return;
     setClaiming(true);
     try {
+      const token = localStorage.getItem('bingo_auth_token') || localStorage.getItem('token');
       const res = await fetch(apiUrl('/api/referral/claim'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
         body: JSON.stringify({ playerId: user.playerId })
       });
       const data = await res.json();
@@ -135,6 +110,9 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
         telegramSdk.triggerHaptic('success');
         setClaimedSuccess(`Claimed ${(data.claimedAmountETB || (stats.pendingClaimETB || 150))} Birr commission to wallet!`);
         setStats((prev) => prev ? { ...prev, pendingClaimUSD: 0, pendingClaimETB: 0 } : null);
+      } else if (data.error) {
+        soundService.playError();
+        setClaimedSuccess(data.error);
       }
     } catch (e) {
       soundService.playError();
