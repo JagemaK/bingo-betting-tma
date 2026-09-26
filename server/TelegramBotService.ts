@@ -1,13 +1,6 @@
 import { Server as SocketIOServer } from 'socket.io';
-import { fetch as undiciFetch, Agent } from 'undici';
 import { authService } from './AuthService.js';
 import { ledgerService } from './LedgerService.js';
-
-const telegramAgent = new Agent({
-  connect: { timeout: 25000 },
-  keepAliveTimeout: 60000,
-  keepAliveMaxTimeout: 120000
-});
 
 export interface TelegramContact {
   phone_number: string;
@@ -141,11 +134,10 @@ export class TelegramBotService {
 
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        const response = await undiciFetch(url, {
+        const response = await fetch(url, {
           method: payload ? 'POST' : 'GET',
           headers: payload ? { 'Content-Type': 'application/json' } : {},
           body: payload ? JSON.stringify(payload) : undefined,
-          dispatcher: telegramAgent,
           signal: AbortSignal.timeout(25000)
         });
         const data = await response.json();
