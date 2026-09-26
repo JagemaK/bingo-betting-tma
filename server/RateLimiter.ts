@@ -105,3 +105,40 @@ export class RateLimiter {
 }
 
 export const authRateLimiter = new RateLimiter(5, 5 * 60 * 1000, 5 * 60 * 1000);
+
+export function createRateLimitMiddleware(
+  limiter: RateLimiter,
+  options?: {
+    keyGenerator?: (req: any) => string;
+    errorMessage?: string;
+  }
+) {
+  return (req: any, res: any, next: any) => {
+    // In test environment, bypass rate limits unless explicitly opting in
+    if (process.env.NODE_ENV === 'test' && !req.headers['x-test-rate-limit'] && process.env.ENABLE_RATE_LIMIT_TEST !== 'true') {
+      return next();
+    }
+
+    const ip = req.ip || req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '127.0.0.1';
+    const key = options?.keyGenerator
+      ? options.keyGenerator(req)
+      : `${req.path}:${Array.isArray(ip) ? ip[0] : ip}`;
+
+    const check = limiter.isRateLimited(key);
+    if (check.limited) {
+      return res.status(429).json({
+        error: options?.errorMessage || 'Too many requests. Please try again later.',
+        retryAfterSeconds: check.retryAfterSeconds
+      });
+    }
+
+    limiter.recordFailure(key);
+    next();
+  };
+}
+
+// 15 sensitive requests per minute per IP for sensitive auth operations
+export const authEndpointRateLimiter = new RateLimiter(15, 60 * 1000, 60 * 1000);
+export const authEndpointRateLimitMiddleware = createRateLimitMiddleware(authEndpointRateLimiter, {
+  errorMessage: 'Too many authentication attempts. Please try again in 1 minute.'
+});

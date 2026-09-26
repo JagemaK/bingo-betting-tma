@@ -82,7 +82,7 @@ export const DailyJackpotModal: React.FC<DailyJackpotModalProps> = ({
         setCards(data.cards || []);
       }
     } catch (err: any) {
-      if (!silent) setErrorMsg('Failed to load Daily Grand Jackpot details');
+      if (!silent) setErrorMsg('Failed to load Weekend Jackpot details');
     } finally {
       if (!silent) setLoading(false);
     }
@@ -178,7 +178,7 @@ export const DailyJackpotModal: React.FC<DailyJackpotModalProps> = ({
       soundService.playJackpotFanfare();
       telegramSdk.triggerHaptic('heavy');
 
-      setSuccessMsg(`🎉 Successfully purchased ${selectedNumbers.length} card(s) for the Daily Grand Jackpot!`);
+      setSuccessMsg(`🎉 Successfully purchased ${selectedNumbers.length} card(s) for the Weekend Jackpot!`);
       setSelectedNumbers([]);
 
       if (data.user && onUpdateUser) {
@@ -207,23 +207,23 @@ export const DailyJackpotModal: React.FC<DailyJackpotModalProps> = ({
       <div className="relative w-full max-w-2xl max-h-[92vh] bg-[#0d0d0d] border border-amber-500/30 rounded-3xl flex flex-col shadow-[0_0_50px_rgba(245,158,11,0.2)] overflow-hidden">
         
         {/* Sticky Header */}
-        <div className="p-4 sm:p-5 border-b border-white/10 flex items-center justify-between bg-gradient-to-r from-amber-950/40 via-[#141414] to-[#0d0d0d] flex-shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-amber-500/20 border border-amber-400/40 flex items-center justify-center flex-shrink-0 shadow-[0_0_15px_rgba(245,158,11,0.3)]">
-              <Trophy className="w-5 h-5 text-amber-300" />
+        <div className="p-3.5 sm:p-5 border-b border-white/10 flex items-center justify-between bg-gradient-to-r from-amber-950/40 via-[#141414] to-[#0d0d0d] flex-shrink-0 min-w-0">
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1 mr-2">
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-2xl bg-amber-500/20 border border-amber-400/40 flex items-center justify-center flex-shrink-0 shadow-[0_0_15px_rgba(245,158,11,0.3)]">
+              <Trophy className="w-4 h-4 sm:w-5 sm:h-5 text-amber-300" />
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="font-arcade text-base sm:text-lg font-black uppercase text-white tracking-wider">
-                  DAILY GRAND JACKPOT
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
+                <span className="font-arcade text-sm sm:text-lg font-black uppercase text-white tracking-wider truncate whitespace-nowrap min-w-0">
+                  WEEKEND JACKPOT
                 </span>
-                <span className="text-[10px] font-arcade font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                <span className="text-[9px] sm:text-[10px] font-arcade font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 shrink-0 whitespace-nowrap">
                   999 BIRR / CARD
                 </span>
               </div>
-              <p className="text-xs text-white/50 flex items-center gap-1.5 mt-0.5">
-                <Clock className="w-3.5 h-3.5 text-amber-400" />
-                <span>Daily Cutoff: <strong>12:00 PM (Addis Ababa)</strong></span>
+              <p className="text-xs text-white/50 flex items-center gap-1.5 mt-0.5 truncate whitespace-nowrap">
+                <Clock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <span className="truncate">Weekly Cutoff: <strong>Sunday 10:00 AM (Addis Ababa)</strong></span>
               </p>
             </div>
           </div>
@@ -233,7 +233,7 @@ export const DailyJackpotModal: React.FC<DailyJackpotModalProps> = ({
               soundService.playClick();
               onClose();
             }}
-            className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white/70 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+            className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white/70 hover:text-white flex items-center justify-center transition-colors cursor-pointer shrink-0"
           >
             <X className="w-4 h-4" />
           </button>
@@ -270,13 +270,13 @@ export const DailyJackpotModal: React.FC<DailyJackpotModalProps> = ({
                 <AlertCircle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
                 <div className="space-y-1">
                   <div className="font-arcade text-xs font-black uppercase text-amber-300 tracking-wider">
-                    DAILY GRAND JACKPOT POSTPONED
+                    WEEKEND JACKPOT POSTPONED
                   </div>
                   <p className="text-xs text-white/80 leading-relaxed">
-                    Not enough cards were sold to start today's jackpot. Minimum required: <strong>100 cards</strong>.
+                    Not enough cards were sold to start this weekend's jackpot. Minimum required: <strong>100 cards</strong>.
                   </p>
                   <p className="text-[11px] text-amber-200/70">
-                    Registration remains open for the next Daily Grand Jackpot. Next check: <strong>Tomorrow at 12:00 PM</strong>.
+                    Registration remains open for the Weekend Jackpot. Next check: <strong>Sunday at 10:00 AM</strong>.
                   </p>
                 </div>
               </div>
@@ -338,10 +338,10 @@ export const DailyJackpotModal: React.FC<DailyJackpotModalProps> = ({
           </div>
 
           {/* Sub Navigation Tabs */}
-          <div className="flex items-center gap-2 border-b border-white/10 pb-2">
+          <div className="flex items-center gap-1.5 sm:gap-2 border-b border-white/10 pb-2 overflow-x-auto custom-scrollbar no-scrollbar">
             <button
               onClick={() => setActiveSubTab('catalog')}
-              className={`px-3 py-1.5 rounded-xl font-arcade text-xs font-bold transition-colors cursor-pointer ${
+              className={`px-2.5 sm:px-3 py-1.5 rounded-xl font-arcade text-xs font-bold transition-colors cursor-pointer shrink-0 whitespace-nowrap ${
                 activeSubTab === 'catalog'
                   ? 'bg-amber-500 text-black shadow-[0_0_12px_rgba(245,158,11,0.4)]'
                   : 'bg-[#181818] text-white/60 hover:text-white'
@@ -351,7 +351,7 @@ export const DailyJackpotModal: React.FC<DailyJackpotModalProps> = ({
             </button>
             <button
               onClick={() => setActiveSubTab('my_cards')}
-              className={`px-3 py-1.5 rounded-xl font-arcade text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5 ${
+              className={`px-2.5 sm:px-3 py-1.5 rounded-xl font-arcade text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5 shrink-0 whitespace-nowrap ${
                 activeSubTab === 'my_cards'
                   ? 'bg-amber-500 text-black shadow-[0_0_12px_rgba(245,158,11,0.4)]'
                   : 'bg-[#181818] text-white/60 hover:text-white'
@@ -364,7 +364,7 @@ export const DailyJackpotModal: React.FC<DailyJackpotModalProps> = ({
             </button>
             <button
               onClick={() => setActiveSubTab('rules')}
-              className={`px-3 py-1.5 rounded-xl font-arcade text-xs font-bold transition-colors cursor-pointer ${
+              className={`px-2.5 sm:px-3 py-1.5 rounded-xl font-arcade text-xs font-bold transition-colors cursor-pointer shrink-0 whitespace-nowrap ${
                 activeSubTab === 'rules'
                   ? 'bg-amber-500 text-black shadow-[0_0_12px_rgba(245,158,11,0.4)]'
                   : 'bg-[#181818] text-white/60 hover:text-white'
@@ -428,7 +428,7 @@ export const DailyJackpotModal: React.FC<DailyJackpotModalProps> = ({
               {myTickets.length === 0 ? (
                 <div className="p-8 text-center text-white/40 space-y-2">
                   <Trophy className="w-10 h-10 mx-auto text-white/20" />
-                  <p className="text-xs">You have not purchased any cards for this Daily Grand Jackpot round yet.</p>
+                  <p className="text-xs">You have not purchased any cards for this Weekend Jackpot round yet.</p>
                   <button
                     onClick={() => setActiveSubTab('catalog')}
                     className="text-xs text-amber-400 hover:underline font-arcade uppercase"
@@ -462,14 +462,14 @@ export const DailyJackpotModal: React.FC<DailyJackpotModalProps> = ({
             <div className="p-4 rounded-2xl bg-[#141414] border border-white/10 space-y-3 text-xs text-white/70 leading-relaxed">
               <h4 className="font-arcade text-sm font-black text-white uppercase flex items-center gap-2">
                 <Info className="w-4 h-4 text-amber-400" />
-                <span>DAILY GRAND JACKPOT RULES</span>
+                <span>WEEKEND JACKPOT RULES</span>
               </h4>
               <ul className="space-y-2 list-disc pl-4 text-white/80">
-                <li><strong>Schedule:</strong> Drawn every single day at <strong>12:00 PM (Africa/Addis_Ababa)</strong>.</li>
+                <li><strong>Schedule:</strong> Drawn every Sunday at <strong>10:00 AM (Africa/Addis_Ababa)</strong>.</li>
                 <li><strong>Card Price:</strong> Fixed at <strong>999 ETB</strong> per ticket.</li>
                 <li><strong>Catalog:</strong> Exactly <strong>200 cards</strong> available per round.</li>
-                <li><strong>Minimum Threshold:</strong> At least <strong>100 cards</strong> must be purchased by 12:00 PM to initiate the draw.</li>
-                <li><strong>Postponement:</strong> If fewer than 100 cards are sold at 12:00 PM, the draw is postponed. Purchased cards remain active and registration continues until 12:00 PM tomorrow.</li>
+                <li><strong>Minimum Threshold:</strong> At least <strong>100 cards</strong> must be purchased by Sunday 10:00 AM to initiate the draw.</li>
+                <li><strong>Postponement:</strong> If fewer than 100 cards are sold at Sunday 10:00 AM, the draw is postponed. Purchased cards remain active and registration continues until next Sunday 10:00 AM.</li>
                 <li><strong>Prize Pot:</strong>
                   <ul className="list-disc pl-4 mt-1 space-y-1 text-white/70">
                     <li>100–110 cards: <strong>100,000 ETB</strong> guaranteed winner pot.</li>

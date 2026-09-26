@@ -16,21 +16,32 @@ function resolveBackendUrl(): string {
     return envUrl.trim().replace(/\/+$/, '');
   }
 
-  // 2. Query param override if passed (e.g. ?backend=https://...)
-  if (typeof window !== 'undefined' && window.location?.search) {
-    const params = new URLSearchParams(window.location.search);
-    const queryBackend = params.get('backend');
-    if (queryBackend) {
-      return queryBackend.trim().replace(/\/+$/, '');
+  // 2. Query param override ONLY permitted in local development on loopback interfaces
+  // (Prevents token/initData exfiltration attacks via crafted Mini App URLs)
+  if (import.meta.env.DEV && typeof window !== 'undefined' && window.location?.search) {
+    const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    if (isLocalhost) {
+      const params = new URLSearchParams(window.location.search);
+      const queryBackend = params.get('backend');
+      if (queryBackend) {
+        return queryBackend.trim().replace(/\/+$/, '');
+      }
     }
   }
 
-  // 3. In dev mode without explicit VITE_BACKEND_URL, default to local backend on port 3001
+  // 3. If accessing via remote domain or tunnel (e.g. trycloudflare.com), use window.location.origin
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+      return window.location.origin;
+    }
+  }
+
+  // 4. In dev mode without explicit VITE_BACKEND_URL on localhost, default to local backend on port 3001
   if (import.meta.env.DEV) {
     return 'http://localhost:3001';
   }
 
-  // 4. In browser production / fallback, use window.location.origin
+  // 5. In browser production / fallback, use window.location.origin
   if (typeof window !== 'undefined' && window.location?.origin) {
     return window.location.origin;
   }

@@ -24,6 +24,7 @@ import { soundService } from '../services/soundService.js';
 import { telegramSdk } from '../services/telegramSdk.js';
 import { useAuth } from '../services/authContext.js';
 import { apiUrl } from '../config/api.js';
+import { ModalHeader } from './ModalHeader.js';
 
 export type AuthModalMode =
   | 'teaser'
@@ -679,53 +680,29 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         <div className="absolute top-0 inset-x-0 h-32 bg-gradient-to-b from-[#E8FF00]/10 via-transparent to-transparent pointer-events-none" />
 
         {/* Header */}
-        <header className="relative z-20 w-full px-4 py-3 bg-[#161616]/90 backdrop-blur-xl border-b border-white/10 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => {
-                soundService.playClick();
-                if (mode === 'forgot_password' || mode === 'reset_verify' || mode === 'new_password') {
-                  setMode('login');
-                  setErrorMessage(null);
-                  setDeniedReason(null);
-                } else if (mode === 'verify') {
-                  setMode(isInsideTg ? 'tg_register' : 'register');
-                  setErrorMessage(null);
-                  setDeniedReason(null);
-                } else if (mode === 'tg_register') {
-                  onClose();
-                  setErrorMessage(null);
-                } else {
-                  onClose();
-                }
-              }}
-              className="w-8 h-8 rounded-xl bg-[#202020] hover:bg-[#282828] text-white/80 hover:text-white border border-white/10 flex items-center justify-center transition-all cursor-pointer active:scale-95"
-              title="Back"
-            >
-              <ArrowLeft className="w-4 h-4" />
-            </button>
-
-            <div className="flex items-center gap-2">
-              <span className="font-arcade font-black text-base text-white uppercase tracking-wider">
-                BINGO BET
-              </span>
-              <span className="text-[9px] font-arcade font-black px-2 py-0.5 rounded-full bg-[#E8FF00] text-black uppercase">
-                WEB
-              </span>
-            </div>
-          </div>
-
-          <button
-            onClick={() => {
-              soundService.playClick();
+        <ModalHeader
+          title="BINGO BET"
+          badge={isInsideTg ? "TELEGRAM" : "WEB"}
+          badgeVariant="yellow"
+          onBack={() => {
+            soundService.playClick();
+            if (mode === 'forgot_password' || mode === 'reset_verify' || mode === 'new_password') {
+              setMode('login');
+              setErrorMessage(null);
+              setDeniedReason(null);
+            } else if (mode === 'verify') {
+              setMode(isInsideTg ? 'tg_register' : 'register');
+              setErrorMessage(null);
+              setDeniedReason(null);
+            } else if (mode === 'tg_register') {
               onClose();
-            }}
-            className="w-8 h-8 rounded-full bg-[#202020] hover:bg-[#282828] text-white/60 hover:text-white border border-white/10 transition-all flex items-center justify-center cursor-pointer active:scale-95"
-            title="Close"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </header>
+              setErrorMessage(null);
+            } else {
+              onClose();
+            }
+          }}
+          onClose={onClose}
+        />
 
         {/* Main Content */}
         <main className="relative z-10 flex-1 overflow-y-auto custom-scrollbar p-5 space-y-4 font-arcade">

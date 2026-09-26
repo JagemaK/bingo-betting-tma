@@ -6,6 +6,75 @@ export const BONUS_EXPIRATION_HOURS = 24;
 export const BONUS_ALLOWED_PURCHASES = ['BINGO_CARD', 'DAILY_GRAND_JACKPOT_CARD'] as const;
 export type BonusAllowedPurchase = typeof BONUS_ALLOWED_PURCHASES[number];
 
+export const REFERRAL_REWARD_AMOUNT = 10.0; // 10.00 ETB per qualified referral
+export const CARDS_PER_ROOM_REWARD_MILESTONE = 10; // 10 cards per room milestone
+
+export interface RoomRewardConfig {
+  roomId: string;
+  roomName: string;
+  cardPrice: number; // in ETB
+  badge?: string;
+}
+
+export const DEFAULT_ROOM_REWARDS: RoomRewardConfig[] = [
+  { roomId: 'room_10birr', roomName: 'Starter Lounge', cardPrice: 10, badge: '🔥 10 BIRR ENTRY' },
+  { roomId: 'room_20birr', roomName: 'Bronze Room', cardPrice: 20, badge: '⭐ 20 BIRR' },
+  { roomId: 'room_50birr', roomName: 'Gold Arena', cardPrice: 50, badge: '💎 50 BIRR POPULAR' },
+  { roomId: 'room_100birr', roomName: 'Diamond High-Roller', cardPrice: 100, badge: '👑 100 BIRR MAX VIP' }
+];
+
+export interface RoomPlayRewardStatus {
+  roomId: string;
+  roomName: string;
+  cardPrice: number;
+  cardsPurchased: number;
+  milestonesClaimed: number;
+  completedBlocks: number;
+  availableBlocks: number;
+  availableRewardAmount: number;
+  progress: number;
+  target: number;
+  status: 'PROGRESS' | 'REWARD_AVAILABLE' | 'CLAIMED';
+  badge?: string;
+}
+
+export interface ReferralRewardStatus {
+  referralCode: string;
+  referralLink: string;
+  totalInvited: number;
+  qualifiedCount: number;
+  claimedCount: number;
+  unclaimedCount: number;
+  availableRewardAmount: number;
+  rewardPerReferral: number;
+}
+
+export interface FirstDepositRewardStatus {
+  status: 'NOT_ELIGIBLE' | 'CLAIMABLE' | 'CLAIMED';
+  qualifyingDepositAmount: number;
+  rewardAmount: number;
+  claimedAt?: string | null;
+  depositId?: string;
+}
+
+export interface RewardHistoryItem {
+  id: string;
+  rewardType: 'FIRST_DEPOSIT' | 'ROOM_PLAY' | 'REFERRAL';
+  amount: number;
+  claimedAt: string;
+  status: 'CLAIMED';
+  description: string;
+}
+
+export interface UserRewardsSummary {
+  bonusBalance: number;
+  cashBalance: number;
+  firstDeposit: FirstDepositRewardStatus;
+  roomRewards: RoomPlayRewardStatus[];
+  referralRewards: ReferralRewardStatus;
+  history: RewardHistoryItem[];
+}
+
 export interface PromotionalReward {
   id: string;
   userId: string;
@@ -49,9 +118,13 @@ export function calculateFirstDepositBonus(depositAmount: number): number {
 
 export class RewardService {
   private db: any;
+  private roomConfigs: Map<string, RoomRewardConfig> = new Map();
 
   constructor(dbInstance: any) {
     this.db = dbInstance;
+    for (const cfg of DEFAULT_ROOM_REWARDS) {
+      this.roomConfigs.set(cfg.roomId, cfg);
+    }
   }
 
   public calculateFirstDepositBonus(depositAmount: number): number {
@@ -173,6 +246,25 @@ export class RewardService {
       `First Deposit Promotional Bonus (10% on ${depositAmount.toFixed(2)} ETB, max 50 ETB, 24h validity)`,
       issuedAt
     );
+
+    // 4. Record in reward_claims
+    try {
+      this.db.prepare(`
+        INSERT INTO reward_claims (id, user_id, reward_type, reward_amount, details_json, claimed_at)
+        VALUES (?, ?, 'FIRST_DEPOSIT', ?, ?, ?)
+      `).run(
+        `claim_fd_${rewardId}`,
+        userId,
+        bonusAmount,
+        JSON.stringify({
+          depositId,
+          depositAmount,
+          bonusPercentage: BONUS_PERCENTAGE,
+          cappedAt: MAX_FIRST_DEPOSIT_BONUS
+        }),
+        issuedAt
+      );
+    } catch (_) {}
 
     return {
       id: rewardId,
@@ -344,6 +436,17 @@ export class RewardService {
       remainingCostCents -= consumeCents;
     }
 
+    // If remainingCostCents > 0 and user has remaining bonus balance in wallet (e.g. from Room / Referral rewards):
+    const totalWalletBonusCents = Math.round(bonusBalance * 100);
+    const unallocatedBonusCents = Math.max(0, totalWalletBonusCents - totalBonusPaidCents);
+    if (remainingCostCents > 0 && unallocatedBonusCents > 0) {
+      const extraBonusCents = Math.min(remainingCostCents, unallocatedBonusCents);
+      const extraBonusAmount = Number((extraBonusCents / 100).toFixed(2));
+      bonusConsumedRecords.push({ rewardId: `bonus_${referenceId}`, amount: extraBonusAmount });
+      totalBonusPaidCents += extraBonusCents;
+      remainingCostCents -= extraBonusCents;
+    }
+
     const bonusPaid = Number((totalBonusPaidCents / 100).toFixed(2));
     const cashPaid = Number((remainingCostCents / 100).toFixed(2));
 
@@ -411,6 +514,25 @@ export class RewardService {
               WHERE id = ?
             `).run(restoredRemaining, status, nowIso, rew.id);
           }
+        }
+      } else {
+        // Fallback for crash/server recovery where specific consumed record IDs were not preserved in memory
+        const activeOrConsumed = this.db.prepare(`
+          SELECT * FROM promotional_rewards
+          WHERE user_id = ? AND expires_at > ? AND status IN ('AWARDED', 'PARTIALLY_CONSUMED', 'CONSUMED')
+          ORDER BY expires_at DESC LIMIT 1
+        `).get(userId, nowIso) as any;
+        if (activeOrConsumed) {
+          const restoredRemaining = Math.min(
+            activeOrConsumed.bonus_amount,
+            Number((Math.round((activeOrConsumed.remaining_amount + cleanBonus) * 100) / 100).toFixed(2))
+          );
+          const status = restoredRemaining === activeOrConsumed.bonus_amount ? 'AWARDED' : 'PARTIALLY_CONSUMED';
+          this.db.prepare(`
+            UPDATE promotional_rewards
+            SET remaining_amount = ?, status = ?, updated_at = ?
+            WHERE id = ?
+          `).run(restoredRemaining, status, nowIso, activeOrConsumed.id);
         }
       }
 
@@ -520,4 +642,490 @@ export class RewardService {
       updatedAt: r.updated_at
     }));
   }
+
+  // =========================================================================
+  // 1. AUTHORITATIVE FIRST DEPOSIT REWARD (10% MAX 50 ETB, IDEMPOTENT)
+  // =========================================================================
+
+  public getFirstDepositRewardStatus(userId: string): FirstDepositRewardStatus {
+    // Check if already recorded in reward_claims
+    const existingClaim = this.db.prepare(`
+      SELECT * FROM reward_claims WHERE user_id = ? AND reward_type = 'FIRST_DEPOSIT'
+    `).get(userId) as any;
+
+    if (existingClaim) {
+      let depositAmt = 0;
+      try {
+        const details = JSON.parse(existingClaim.details_json);
+        depositAmt = details.depositAmount || 0;
+      } catch (_) {}
+      return {
+        status: 'CLAIMED',
+        qualifyingDepositAmount: depositAmt,
+        rewardAmount: Number(existingClaim.reward_amount),
+        claimedAt: existingClaim.claimed_at
+      };
+    }
+
+    // Check promotional_rewards table for legacy or auto-awarded rewards
+    const promo = this.db.prepare(`
+      SELECT * FROM promotional_rewards WHERE user_id = ? AND reward_type = 'FIRST_DEPOSIT_BONUS'
+    `).get(userId) as any;
+
+    if (promo) {
+      return {
+        status: 'CLAIMED',
+        qualifyingDepositAmount: Number(promo.deposit_amount),
+        rewardAmount: Number(promo.bonus_amount),
+        claimedAt: promo.issued_at,
+        depositId: promo.qualifying_deposit_id
+      };
+    }
+
+    // Find earliest approved deposit
+    const firstApproved = this.db.prepare(`
+      SELECT * FROM deposit_requests WHERE user_id = ? AND status = 'APPROVED' ORDER BY created_at ASC LIMIT 1
+    `).get(userId) as any;
+
+    if (!firstApproved) {
+      return {
+        status: 'NOT_ELIGIBLE',
+        qualifyingDepositAmount: 0,
+        rewardAmount: 0,
+        claimedAt: null
+      };
+    }
+
+    const bonusAmount = calculateFirstDepositBonus(Number(firstApproved.amount));
+    return {
+      status: 'CLAIMABLE',
+      qualifyingDepositAmount: Number(firstApproved.amount),
+      rewardAmount: bonusAmount,
+      claimedAt: null,
+      depositId: firstApproved.id
+    };
+  }
+
+  public claimFirstDepositReward(userId: string): {
+    success: boolean;
+    rewardAmount: number;
+    qualifyingDepositAmount: number;
+    bonusBalance: number;
+  } {
+    const status = this.getFirstDepositRewardStatus(userId);
+    if (status.status === 'CLAIMED') {
+      throw new Error('First deposit reward has already been claimed');
+    }
+    if (status.status === 'NOT_ELIGIBLE' || status.rewardAmount <= 0) {
+      throw new Error('User is not eligible for first deposit reward. A qualifying first deposit is required.');
+    }
+
+    const rewardAmount = status.rewardAmount;
+    const depositAmount = status.qualifyingDepositAmount;
+    const now = new Date().toISOString();
+    const claimId = `claim_fd_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+
+    // 1. Insert into reward_claims
+    this.db.prepare(`
+      INSERT INTO reward_claims (id, user_id, reward_type, reward_amount, details_json, claimed_at)
+      VALUES (?, ?, 'FIRST_DEPOSIT', ?, ?, ?)
+    `).run(claimId, userId, rewardAmount, JSON.stringify({
+      depositId: status.depositId,
+      depositAmount,
+      bonusPercentage: BONUS_PERCENTAGE,
+      cappedAt: MAX_FIRST_DEPOSIT_BONUS
+    }), now);
+
+    // 2. Increment wallet bonus_balance
+    this.db.prepare(`
+      UPDATE wallets
+      SET bonus_balance = round(bonus_balance + ?, 2), updated_at = ?
+      WHERE user_id = ?
+    `).run(rewardAmount, now, userId);
+
+    // 3. Record financial ledger transaction
+    const entryId = `tx_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+    const wallet = this.db.prepare('SELECT balance, bonus_balance FROM wallets WHERE user_id = ?').get(userId);
+    const cashBal = wallet ? Number(wallet.balance) : 0;
+    const bonusBal = wallet ? Number(wallet.bonus_balance) : 0;
+
+    this.db.prepare(`
+      INSERT INTO ledger_transactions (
+        id, user_id, username, type, amount, balance_before, balance_after,
+        reference_id, description, created_at
+      ) VALUES (?, ?, 'Player', 'BONUS', ?, ?, ?, ?, ?, ?)
+    `).run(
+      entryId,
+      userId,
+      rewardAmount,
+      cashBal,
+      cashBal,
+      `first_deposit_reward_${userId}`,
+      `First Deposit Reward (10% on ${depositAmount.toFixed(2)} ETB, max 50 ETB)`,
+      now
+    );
+
+    return {
+      success: true,
+      rewardAmount,
+      qualifyingDepositAmount: depositAmount,
+      bonusBalance: bonusBal
+    };
+  }
+
+  // =========================================================================
+  // 2. AUTHORITATIVE CARD / ROOM PLAY REWARD (10 CARDS = ROOM CARD PRICE)
+  // =========================================================================
+
+  public registerRoomConfig(config: RoomRewardConfig): void {
+    this.roomConfigs.set(config.roomId, config);
+  }
+
+  public getRoomRewardConfig(roomId: string): RoomRewardConfig {
+    if (this.roomConfigs.has(roomId)) {
+      return this.roomConfigs.get(roomId)!;
+    }
+    const match = roomId.match(/(\d+)/);
+    const price = match ? parseInt(match[1], 10) : 10;
+    return { roomId, roomName: `Room ${price} ETB`, cardPrice: price };
+  }
+
+  public recordCardPurchase(userId: string, roomId: string, quantity: number = 1): void {
+    if (!userId || !roomId || quantity <= 0) return;
+    const now = new Date().toISOString();
+    const id = `rprog_${userId}_${roomId}`;
+
+    this.db.prepare(`
+      INSERT INTO user_room_reward_progress (id, user_id, room_id, cards_purchased, milestones_claimed, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 0, ?, ?)
+      ON CONFLICT(user_id, room_id) DO UPDATE SET
+        cards_purchased = cards_purchased + excluded.cards_purchased,
+        updated_at = excluded.updated_at
+    `).run(id, userId, roomId, quantity, now, now);
+  }
+
+  public recordCardRefund(userId: string, roomId: string, quantity: number = 1): void {
+    if (!userId || !roomId || quantity <= 0) return;
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      UPDATE user_room_reward_progress
+      SET cards_purchased = max(0, cards_purchased - ?), updated_at = ?
+      WHERE user_id = ? AND room_id = ?
+    `).run(quantity, now, userId, roomId);
+  }
+
+  public getRoomPlayRewards(userId: string): RoomPlayRewardStatus[] {
+    const rooms = Array.from(this.roomConfigs.values());
+    const rows = this.db.prepare(`
+      SELECT * FROM user_room_reward_progress WHERE user_id = ?
+    `).all(userId) as any[];
+    const progressMap = new Map(rows.map(r => [r.room_id, r]));
+
+    return rooms.map(room => {
+      const prog = progressMap.get(room.roomId);
+      const cardsPurchased = prog ? Number(prog.cards_purchased) || 0 : 0;
+      const milestonesClaimed = prog ? Number(prog.milestones_claimed) || 0 : 0;
+      const completedBlocks = Math.floor(cardsPurchased / CARDS_PER_ROOM_REWARD_MILESTONE);
+      const availableBlocks = Math.max(0, completedBlocks - milestonesClaimed);
+      const availableRewardAmount = Number((availableBlocks * room.cardPrice).toFixed(2));
+      const progress = cardsPurchased % CARDS_PER_ROOM_REWARD_MILESTONE;
+      const status: 'PROGRESS' | 'REWARD_AVAILABLE' | 'CLAIMED' =
+        availableBlocks > 0 ? 'REWARD_AVAILABLE' : (milestonesClaimed > 0 ? 'CLAIMED' : 'PROGRESS');
+
+      return {
+        roomId: room.roomId,
+        roomName: room.roomName,
+        cardPrice: room.cardPrice,
+        cardsPurchased,
+        milestonesClaimed,
+        completedBlocks,
+        availableBlocks,
+        availableRewardAmount,
+        progress,
+        target: CARDS_PER_ROOM_REWARD_MILESTONE,
+        status,
+        badge: room.badge
+      };
+    });
+  }
+
+  public claimRoomPlayReward(userId: string, roomId: string): {
+    success: boolean;
+    roomId: string;
+    rewardAmount: number;
+    blocksClaimed: number;
+    bonusBalance: number;
+  } {
+    const room = this.getRoomRewardConfig(roomId);
+    const prog = this.db.prepare(`
+      SELECT * FROM user_room_reward_progress WHERE user_id = ? AND room_id = ?
+    `).get(userId, roomId) as any;
+
+    if (!prog) {
+      throw new Error(`No play reward progress found for room ${roomId}`);
+    }
+
+    const cardsPurchased = Number(prog.cards_purchased) || 0;
+    const milestonesClaimed = Number(prog.milestones_claimed) || 0;
+    const completedBlocks = Math.floor(cardsPurchased / CARDS_PER_ROOM_REWARD_MILESTONE);
+    const availableBlocks = completedBlocks - milestonesClaimed;
+
+    if (availableBlocks <= 0) {
+      throw new Error(`No unclaimed rewards available for room ${room.roomName} (${roomId}). Progress: ${cardsPurchased % CARDS_PER_ROOM_REWARD_MILESTONE}/10`);
+    }
+
+    const rewardAmount = Number((availableBlocks * room.cardPrice).toFixed(2));
+    const now = new Date().toISOString();
+
+    // 1. Update progress in user_room_reward_progress
+    this.db.prepare(`
+      UPDATE user_room_reward_progress
+      SET milestones_claimed = milestones_claimed + ?, updated_at = ?
+      WHERE id = ?
+    `).run(availableBlocks, now, prog.id);
+
+    // 2. Increment wallet bonus_balance
+    this.db.prepare(`
+      UPDATE wallets
+      SET bonus_balance = round(bonus_balance + ?, 2), updated_at = ?
+      WHERE user_id = ?
+    `).run(rewardAmount, now, userId);
+
+    // 3. Record in reward_claims
+    const claimId = `claim_room_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+    this.db.prepare(`
+      INSERT INTO reward_claims (id, user_id, reward_type, reward_amount, details_json, claimed_at)
+      VALUES (?, ?, 'ROOM_PLAY', ?, ?, ?)
+    `).run(claimId, userId, rewardAmount, JSON.stringify({
+      roomId: room.roomId,
+      roomName: room.roomName,
+      cardPrice: room.cardPrice,
+      blocksClaimed: availableBlocks,
+      totalCardsPurchased: cardsPurchased
+    }), now);
+
+    // 4. Record financial ledger transaction
+    const entryId = `tx_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+    const wallet = this.db.prepare('SELECT balance, bonus_balance FROM wallets WHERE user_id = ?').get(userId);
+    const cashBal = wallet ? Number(wallet.balance) : 0;
+    const bonusBal = wallet ? Number(wallet.bonus_balance) : 0;
+
+    this.db.prepare(`
+      INSERT INTO ledger_transactions (
+        id, user_id, username, type, amount, balance_before, balance_after,
+        reference_id, description, created_at
+      ) VALUES (?, ?, 'Player', 'BONUS', ?, ?, ?, ?, ?, ?)
+    `).run(
+      entryId,
+      userId,
+      rewardAmount,
+      cashBal,
+      cashBal,
+      `room_play_reward_${claimId}`,
+      `Room Play Reward (${availableBlocks}x milestone in ${room.roomName} @ ${room.cardPrice} ETB)`,
+      now
+    );
+
+    return {
+      success: true,
+      roomId,
+      rewardAmount,
+      blocksClaimed: availableBlocks,
+      bonusBalance: bonusBal
+    };
+  }
+
+  // =========================================================================
+  // 3. AUTHORITATIVE REFERRAL REWARD (10 ETB PER QUALIFIED DEPOSIT)
+  // =========================================================================
+
+  public getReferralRewards(userId: string): ReferralRewardStatus {
+    const user = this.db.prepare('SELECT referral_code FROM users WHERE id = ?').get(userId) as any;
+    const referralCode = user?.referral_code || `BINGO_${userId.slice(-4).toUpperCase()}`;
+    const botUsername = process.env.TELEGRAM_BOT_USERNAME || 'BINGOBEET_BOT';
+    const referralLink = `https://t.me/${botUsername}?start=${referralCode}`;
+
+    // Total invited users
+    const totalInvitedRow = this.db.prepare(`
+      SELECT COUNT(*) as count FROM users WHERE referred_by = ? AND id != ?
+    `).get(userId, userId) as any;
+    const totalInvited = totalInvitedRow ? Number(totalInvitedRow.count) : 0;
+
+    // Qualified referees: referred users who have at least ONE approved deposit
+    const qualifiedReferees = this.db.prepare(`
+      SELECT u.id, u.username
+      FROM users u
+      JOIN deposit_requests dr ON dr.user_id = u.id AND dr.status = 'APPROVED'
+      WHERE u.referred_by = ? AND u.id != ?
+      GROUP BY u.id, u.username
+    `).all(userId, userId) as any[];
+
+    // Referees already claimed
+    const claimedReferees = this.db.prepare(`
+      SELECT referee_id FROM referral_reward_claims WHERE referrer_id = ?
+    `).all(userId) as any[];
+    const claimedSet = new Set(claimedReferees.map(r => r.referee_id));
+
+    const unclaimedReferees = qualifiedReferees.filter(r => !claimedSet.has(r.id));
+    const qualifiedCount = qualifiedReferees.length;
+    const claimedCount = claimedSet.size;
+    const unclaimedCount = unclaimedReferees.length;
+    const availableRewardAmount = Number((unclaimedCount * REFERRAL_REWARD_AMOUNT).toFixed(2));
+
+    return {
+      referralCode,
+      referralLink,
+      totalInvited,
+      qualifiedCount,
+      claimedCount,
+      unclaimedCount,
+      availableRewardAmount,
+      rewardPerReferral: REFERRAL_REWARD_AMOUNT
+    };
+  }
+
+  public claimReferralRewards(userId: string): {
+    success: boolean;
+    rewardAmount: number;
+    qualifiedClaimed: number;
+    bonusBalance: number;
+  } {
+    // Find unclaimed qualified referees
+    const qualifiedReferees = this.db.prepare(`
+      SELECT u.id, u.username
+      FROM users u
+      JOIN deposit_requests dr ON dr.user_id = u.id AND dr.status = 'APPROVED'
+      WHERE u.referred_by = ? AND u.id != ?
+      GROUP BY u.id, u.username
+    `).all(userId, userId) as any[];
+
+    const claimedReferees = this.db.prepare(`
+      SELECT referee_id FROM referral_reward_claims WHERE referrer_id = ?
+    `).all(userId) as any[];
+    const claimedSet = new Set(claimedReferees.map(r => r.referee_id));
+
+    const unclaimedReferees = qualifiedReferees.filter(r => !claimedSet.has(r.id));
+
+    if (unclaimedReferees.length === 0) {
+      throw new Error('No unclaimed referral rewards available. Referred players must make a qualifying deposit first.');
+    }
+
+    const count = unclaimedReferees.length;
+    const totalReward = Number((count * REFERRAL_REWARD_AMOUNT).toFixed(2));
+    const now = new Date().toISOString();
+
+    // 1. Insert into referral_reward_claims for each referee (UNIQUE constraint protects against duplicate referee claim)
+    const insertClaimStmt = this.db.prepare(`
+      INSERT INTO referral_reward_claims (id, referrer_id, referee_id, reward_amount, claimed_at)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+
+    for (const ref of unclaimedReferees) {
+      const claimRefId = `ref_claim_${userId}_${ref.id}`;
+      insertClaimStmt.run(claimRefId, userId, ref.id, REFERRAL_REWARD_AMOUNT, now);
+    }
+
+    // 2. Increment wallet bonus_balance
+    this.db.prepare(`
+      UPDATE wallets
+      SET bonus_balance = round(bonus_balance + ?, 2), updated_at = ?
+      WHERE user_id = ?
+    `).run(totalReward, now, userId);
+
+    // 3. Record in reward_claims
+    const claimId = `claim_ref_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+    this.db.prepare(`
+      INSERT INTO reward_claims (id, user_id, reward_type, reward_amount, details_json, claimed_at)
+      VALUES (?, ?, 'REFERRAL', ?, ?, ?)
+    `).run(claimId, userId, totalReward, JSON.stringify({
+      qualifiedCount: count,
+      refereeIds: unclaimedReferees.map(r => r.id),
+      rewardPerReferral: REFERRAL_REWARD_AMOUNT
+    }), now);
+
+    // 4. Record financial ledger transaction
+    const entryId = `tx_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+    const wallet = this.db.prepare('SELECT balance, bonus_balance FROM wallets WHERE user_id = ?').get(userId);
+    const cashBal = wallet ? Number(wallet.balance) : 0;
+    const bonusBal = wallet ? Number(wallet.bonus_balance) : 0;
+
+    this.db.prepare(`
+      INSERT INTO ledger_transactions (
+        id, user_id, username, type, amount, balance_before, balance_after,
+        reference_id, description, created_at
+      ) VALUES (?, ?, 'Player', 'BONUS', ?, ?, ?, ?, ?, ?)
+    `).run(
+      entryId,
+      userId,
+      totalReward,
+      cashBal,
+      cashBal,
+      `referral_reward_${claimId}`,
+      `Referral Reward (${count} qualifying referred player deposit${count > 1 ? 's' : ''} @ ${REFERRAL_REWARD_AMOUNT} ETB)`,
+      now
+    );
+
+    return {
+      success: true,
+      rewardAmount: totalReward,
+      qualifiedClaimed: count,
+      bonusBalance: bonusBal
+    };
+  }
+
+  // =========================================================================
+  // 4. REWARD SUMMARY & HISTORY
+  // =========================================================================
+
+  public getUserRewardsSummary(userId: string): UserRewardsSummary {
+    const wallet = this.db.prepare('SELECT balance, bonus_balance FROM wallets WHERE user_id = ?').get(userId) as any;
+    const cashBalance = wallet ? Number(wallet.balance) || 0 : 0;
+    const bonusBalance = wallet ? Number(wallet.bonus_balance) || 0 : 0;
+
+    const firstDeposit = this.getFirstDepositRewardStatus(userId);
+    const roomRewards = this.getRoomPlayRewards(userId);
+    const referralRewards = this.getReferralRewards(userId);
+    const history = this.getRewardHistory(userId);
+
+    return {
+      bonusBalance,
+      cashBalance,
+      firstDeposit,
+      roomRewards,
+      referralRewards,
+      history
+    };
+  }
+
+  public getRewardHistory(userId: string): RewardHistoryItem[] {
+    const claims = this.db.prepare(`
+      SELECT * FROM reward_claims WHERE user_id = ? ORDER BY claimed_at DESC LIMIT 50
+    `).all(userId) as any[];
+
+    return claims.map(c => {
+      let desc = '';
+      try {
+        const details = JSON.parse(c.details_json);
+        if (c.reward_type === 'FIRST_DEPOSIT') {
+          desc = `10% First Deposit Bonus (${details.depositAmount || 0} ETB deposit)`;
+        } else if (c.reward_type === 'ROOM_PLAY') {
+          desc = `${details.blocksClaimed || 1}x Milestone in ${details.roomName || details.roomId} (${details.cardPrice || 0} ETB)`;
+        } else if (c.reward_type === 'REFERRAL') {
+          desc = `Referral Bonus for ${details.qualifiedCount || 1} depositing player${(details.qualifiedCount || 1) > 1 ? 's' : ''}`;
+        }
+      } catch (_) {
+        desc = `${c.reward_type} Reward`;
+      }
+
+      return {
+        id: c.id,
+        rewardType: c.reward_type,
+        amount: Number(c.reward_amount),
+        claimedAt: c.claimed_at,
+        status: 'CLAIMED',
+        description: desc
+      };
+    });
+  }
 }
+

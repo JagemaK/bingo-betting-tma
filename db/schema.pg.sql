@@ -14,15 +14,20 @@ CREATE TABLE IF NOT EXISTS users (
     password_salt VARCHAR(64),
     referral_code VARCHAR(32) NOT NULL UNIQUE,
     referred_by VARCHAR(64) REFERENCES users(id) ON DELETE SET NULL,
-    role VARCHAR(16) NOT NULL DEFAULT 'USER' CHECK(role IN ('USER', 'ADMIN')),
+    role VARCHAR(16) NOT NULL DEFAULT 'USER' CHECK(role IN ('USER', 'AGENT', 'SUPER_ADMIN', 'ADMIN')),
     account_status VARCHAR(16) NOT NULL DEFAULT 'ACTIVE' CHECK(account_status IN ('ACTIVE', 'SUSPENDED', 'BANNED')),
     registration_status VARCHAR(16) NOT NULL DEFAULT 'COMPLETED' CHECK(registration_status IN ('PENDING', 'COMPLETED')),
     avatar_url TEXT,
     is_bot BOOLEAN NOT NULL DEFAULT FALSE,
+    account_type VARCHAR(16) NOT NULL DEFAULT 'REAL' CHECK(account_type IN ('REAL', 'GUEST', 'BOT', 'TEST', 'ADMIN', 'AGENT')),
+    telebirr_number VARCHAR(32),
+    assigned_agent_name VARCHAR(128),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_login_at TIMESTAMPTZ
 );
+
+CREATE INDEX IF NOT EXISTS idx_pg_users_account_type ON users(account_type);
 
 CREATE INDEX IF NOT EXISTS idx_pg_users_telegram_id ON users(telegram_id);
 CREATE INDEX IF NOT EXISTS idx_pg_users_username ON users(username);
@@ -65,7 +70,7 @@ CREATE TABLE IF NOT EXISTS ledger_transactions (
     id VARCHAR(64) PRIMARY KEY,
     user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     username VARCHAR(64) NOT NULL,
-    type VARCHAR(32) NOT NULL CHECK(type IN ('DEPOSIT', 'BET', 'WIN_PAYOUT', 'WITHDRAWAL', 'REFUND', 'BONUS', 'LOSS', 'ADMIN_ADJUSTMENT')),
+    type VARCHAR(32) NOT NULL CHECK(type IN ('DEPOSIT', 'BET', 'WIN_PAYOUT', 'WITHDRAWAL', 'REFUND', 'BONUS', 'LOSS', 'ADMIN_ADJUSTMENT', 'ESCROW_HOLD')),
     amount NUMERIC(14, 2) NOT NULL,
     balance_before NUMERIC(14, 2) NOT NULL,
     balance_after NUMERIC(14, 2) NOT NULL,
@@ -87,6 +92,9 @@ CREATE TABLE IF NOT EXISTS deposit_requests (
     payment_method VARCHAR(64) NOT NULL,
     status VARCHAR(16) NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING', 'APPROVED', 'REJECTED')),
     reference_id VARCHAR(128),
+    payment_account_id VARCHAR(64),
+    payment_phone VARCHAR(32),
+    assigned_agent_id VARCHAR(64),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     processed_at TIMESTAMPTZ,
     processed_by VARCHAR(64),
@@ -101,6 +109,7 @@ CREATE TABLE IF NOT EXISTS withdrawal_requests (
     address VARCHAR(256) NOT NULL,
     status VARCHAR(16) NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING', 'APPROVED', 'REJECTED', 'PROCESSING', 'COMPLETED', 'FAILED')),
     reference_id VARCHAR(128),
+    assigned_agent_id VARCHAR(64),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     processed_at TIMESTAMPTZ,
     processed_by VARCHAR(64),
@@ -180,3 +189,54 @@ CREATE TABLE IF NOT EXISTS pending_registrations (
 
 CREATE INDEX IF NOT EXISTS idx_pg_pending_reg_phone ON pending_registrations(phone);
 CREATE INDEX IF NOT EXISTS idx_pg_pending_reg_telegram_id ON pending_registrations(telegram_user_id);
+
+CREATE TABLE IF NOT EXISTS payment_accounts (
+    id VARCHAR(64) PRIMARY KEY,
+    provider VARCHAR(32) NOT NULL DEFAULT 'TELEBIRR',
+    account_name VARCHAR(128) NOT NULL,
+    phone_number VARCHAR(32) NOT NULL,
+    assigned_agent_id VARCHAR(64) REFERENCES users(id) ON DELETE SET NULL,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    instructions TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS payment_account_logs (
+    id VARCHAR(64) PRIMARY KEY,
+    account_id VARCHAR(64) NOT NULL REFERENCES payment_accounts(id) ON DELETE CASCADE,
+    changed_by VARCHAR(64) NOT NULL REFERENCES users(id),
+    old_phone VARCHAR(32),
+    new_phone VARCHAR(32),
+    old_name VARCHAR(128),
+    new_name VARCHAR(128),
+    action VARCHAR(64) NOT NULL,
+    reason TEXT,
+    timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS agent_activity_logs (
+    id VARCHAR(64) PRIMARY KEY,
+    actor_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    actor_name VARCHAR(128) NOT NULL,
+    role VARCHAR(32) NOT NULL,
+    action VARCHAR(64) NOT NULL,
+    target_type VARCHAR(64),
+    target_id VARCHAR(64),
+    metadata_json JSONB,
+    ip_address VARCHAR(64),
+    timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS weekend_jackpot_config (
+    id VARCHAR(64) PRIMARY KEY,
+    day_of_week VARCHAR(32) NOT NULL DEFAULT 'Sunday',
+    start_time VARCHAR(16) NOT NULL DEFAULT '10:00',
+    timezone VARCHAR(64) NOT NULL DEFAULT 'Africa/Addis_Ababa',
+    card_price NUMERIC(14, 2) NOT NULL DEFAULT 999.0,
+    min_cards INTEGER NOT NULL DEFAULT 100,
+    max_cards INTEGER NOT NULL DEFAULT 200,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    updated_by VARCHAR(64) REFERENCES users(id),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

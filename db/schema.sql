@@ -16,15 +16,20 @@ CREATE TABLE IF NOT EXISTS users (
     password_salt TEXT,
     referral_code TEXT NOT NULL UNIQUE,
     referred_by TEXT REFERENCES users(id) ON DELETE SET NULL,
-    role TEXT NOT NULL DEFAULT 'USER' CHECK(role IN ('USER', 'ADMIN')),
-    account_status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK(account_status IN ('ACTIVE', 'SUSPENDED', 'BANNED')),
+    role TEXT NOT NULL DEFAULT 'USER' CHECK(role IN ('USER', 'AGENT', 'SUPER_ADMIN', 'ADMIN')),
+    account_status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK(account_status IN ('ACTIVE', 'SUSPENDED', 'BANNED', 'DEACTIVATED', 'DELETION_REQUESTED', 'DELETED')),
     registration_status TEXT NOT NULL DEFAULT 'COMPLETED' CHECK(registration_status IN ('PENDING', 'COMPLETED')),
     avatar_url TEXT,
     is_bot INTEGER NOT NULL DEFAULT 0,
+    account_type TEXT NOT NULL DEFAULT 'REAL' CHECK(account_type IN ('REAL', 'GUEST', 'BOT', 'TEST', 'ADMIN', 'AGENT')),
+    telebirr_number TEXT,
+    assigned_agent_name TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     last_login_at TEXT
 );
+
+CREATE INDEX IF NOT EXISTS idx_users_account_type ON users(account_type);
 
 CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_id);
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
@@ -99,6 +104,9 @@ CREATE TABLE IF NOT EXISTS deposit_requests (
     payment_method TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING', 'APPROVED', 'REJECTED')),
     reference_id TEXT,
+    payment_account_id TEXT,
+    payment_phone TEXT,
+    assigned_agent_id TEXT,
     created_at TEXT NOT NULL,
     processed_at TEXT,
     processed_by TEXT,
@@ -107,6 +115,7 @@ CREATE TABLE IF NOT EXISTS deposit_requests (
 
 CREATE INDEX IF NOT EXISTS idx_deposits_user ON deposit_requests(user_id);
 CREATE INDEX IF NOT EXISTS idx_deposits_status ON deposit_requests(status);
+CREATE INDEX IF NOT EXISTS idx_deposits_agent ON deposit_requests(assigned_agent_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_deposits_reference_unique ON deposit_requests(reference_id) WHERE reference_id IS NOT NULL;
 
 -- 7. Withdrawal Requests table (Balance reservation and approval workflow)
@@ -118,6 +127,7 @@ CREATE TABLE IF NOT EXISTS withdrawal_requests (
     address TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING', 'APPROVED', 'REJECTED', 'PROCESSING', 'COMPLETED', 'FAILED')),
     reference_id TEXT,
+    assigned_agent_id TEXT,
     created_at TEXT NOT NULL,
     processed_at TEXT,
     processed_by TEXT,
@@ -126,6 +136,7 @@ CREATE TABLE IF NOT EXISTS withdrawal_requests (
 
 CREATE INDEX IF NOT EXISTS idx_withdrawals_user ON withdrawal_requests(user_id);
 CREATE INDEX IF NOT EXISTS idx_withdrawals_status ON withdrawal_requests(status);
+CREATE INDEX IF NOT EXISTS idx_withdrawals_agent ON withdrawal_requests(assigned_agent_id);
 
 -- 8. Games table (Shared bingo game sessions)
 CREATE TABLE IF NOT EXISTS games (
@@ -284,3 +295,108 @@ CREATE TABLE IF NOT EXISTS promotional_rewards (
 CREATE INDEX IF NOT EXISTS idx_rewards_user ON promotional_rewards(user_id);
 CREATE INDEX IF NOT EXISTS idx_rewards_status_expires ON promotional_rewards(status, expires_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_rewards_user_first_deposit ON promotional_rewards(user_id) WHERE reward_type = 'FIRST_DEPOSIT_BONUS';
+
+-- 17. User Room Play Reward Progress table (Per-room 10-card progress & milestone tracking)
+CREATE TABLE IF NOT EXISTS user_room_reward_progress (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    room_id TEXT NOT NULL,
+    cards_purchased INTEGER NOT NULL DEFAULT 0 CHECK(cards_purchased >= 0),
+    milestones_claimed INTEGER NOT NULL DEFAULT 0 CHECK(milestones_claimed >= 0),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(user_id, room_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_room_progress_user ON user_room_reward_progress(user_id);
+
+-- 18. Referral Reward Claims table (10 ETB per qualifying deposited referred user)
+CREATE TABLE IF NOT EXISTS referral_reward_claims (
+    id TEXT PRIMARY KEY,
+    referrer_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    referee_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+    reward_amount REAL NOT NULL DEFAULT 10.0,
+    claimed_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_ref_claims_referrer ON referral_reward_claims(referrer_id);
+
+-- 19. Authoritative Reward Claims History table (First Deposit, Room Play, and Referral Claims)
+CREATE TABLE IF NOT EXISTS reward_claims (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    reward_type TEXT NOT NULL CHECK(reward_type IN ('FIRST_DEPOSIT', 'ROOM_PLAY', 'REFERRAL')),
+    reward_amount REAL NOT NULL CHECK(reward_amount > 0),
+    details_json TEXT NOT NULL,
+    claimed_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_reward_claims_user ON reward_claims(user_id);
+CREATE INDEX IF NOT EXISTS idx_reward_claims_type ON reward_claims(reward_type);
+
+-- 20. Payment Accounts table (Dynamic Telebirr deposit numbers controlled by Super Admin)
+CREATE TABLE IF NOT EXISTS payment_accounts (
+    id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL DEFAULT 'TELEBIRR',
+    account_name TEXT NOT NULL,
+    phone_number TEXT NOT NULL,
+    assigned_agent_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    account_status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK(account_status IN ('ACTIVE', 'INACTIVE', 'DELETED')),
+    instructions TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_payment_accounts_active ON payment_accounts(is_active);
+CREATE INDEX IF NOT EXISTS idx_payment_accounts_agent ON payment_accounts(assigned_agent_id);
+
+-- 21. Payment Account Audit Logs (Immutable trail of phone number and account name changes)
+CREATE TABLE IF NOT EXISTS payment_account_logs (
+    id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL REFERENCES payment_accounts(id) ON DELETE CASCADE,
+    changed_by TEXT NOT NULL REFERENCES users(id),
+    old_phone TEXT,
+    new_phone TEXT,
+    old_name TEXT,
+    new_name TEXT,
+    action TEXT NOT NULL,
+    reason TEXT,
+    timestamp TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_payment_acc_logs_acc ON payment_account_logs(account_id);
+CREATE INDEX IF NOT EXISTS idx_payment_acc_logs_admin ON payment_account_logs(changed_by);
+
+-- 22. Agent Activity Logs (Granular operational audit trail for financial actions)
+CREATE TABLE IF NOT EXISTS agent_activity_logs (
+    id TEXT PRIMARY KEY,
+    actor_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    actor_name TEXT NOT NULL,
+    role TEXT NOT NULL,
+    action TEXT NOT NULL,
+    target_type TEXT,
+    target_id TEXT,
+    metadata_json TEXT,
+    ip_address TEXT,
+    timestamp TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_activity_actor ON agent_activity_logs(actor_id);
+CREATE INDEX IF NOT EXISTS idx_agent_activity_action ON agent_activity_logs(action);
+CREATE INDEX IF NOT EXISTS idx_agent_activity_time ON agent_activity_logs(timestamp);
+
+-- 23. Weekend Jackpot Configuration table (Configurable Sunday 10:00 Africa/Addis_Ababa schedule)
+CREATE TABLE IF NOT EXISTS weekend_jackpot_config (
+    id TEXT PRIMARY KEY,
+    day_of_week TEXT NOT NULL DEFAULT 'Sunday',
+    start_time TEXT NOT NULL DEFAULT '10:00',
+    timezone TEXT NOT NULL DEFAULT 'Africa/Addis_Ababa',
+    card_price REAL NOT NULL DEFAULT 999.0,
+    min_cards INTEGER NOT NULL DEFAULT 100,
+    max_cards INTEGER NOT NULL DEFAULT 200,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    updated_by TEXT REFERENCES users(id),
+    updated_at TEXT NOT NULL
+);
+

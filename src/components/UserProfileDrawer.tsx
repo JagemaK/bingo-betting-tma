@@ -27,6 +27,7 @@ import {
 import { UserAccount, UserProfile } from '../types/bingo.js';
 import { soundService } from '../services/soundService.js';
 import { telegramSdk } from '../services/telegramSdk.js';
+import { ModalHeader } from './ModalHeader.js';
 import { useAuth } from '../services/authContext.js';
 import { apiUrl } from '../config/api.js';
 
@@ -148,40 +149,13 @@ export const UserProfileDrawer: React.FC<UserProfileDrawerProps> = ({
         <div className="absolute top-0 inset-x-0 h-32 bg-gradient-to-b from-[#E8FF00]/10 via-transparent to-transparent pointer-events-none" />
 
         {/* Header */}
-        <header className="relative z-20 w-full px-5 py-3.5 bg-[#161616]/90 backdrop-blur-xl border-b border-white/10 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => {
-                soundService.playClick();
-                onClose();
-              }}
-              className="w-8 h-8 rounded-xl bg-[#202020] hover:bg-[#282828] text-white/80 hover:text-white border border-white/10 flex items-center justify-center transition-all cursor-pointer active:scale-95"
-              title="Back to Game"
-            >
-              <ArrowLeft className="w-4 h-4" />
-            </button>
-
-            <div className="flex items-center gap-2">
-              <span className="font-arcade font-black text-base text-white uppercase tracking-wider">
-                PLAYER PROFILE
-              </span>
-              <span className="text-[9px] font-arcade font-black px-2 py-0.5 rounded-full bg-[#E8FF00] text-black uppercase">
-                VIP LOUNGE
-              </span>
-            </div>
-          </div>
-
-          <button
-            onClick={() => {
-              soundService.playClick();
-              onClose();
-            }}
-            className="w-8 h-8 rounded-full bg-[#202020] hover:bg-[#282828] text-white/60 hover:text-white border border-white/10 transition-all flex items-center justify-center cursor-pointer active:scale-95"
-            title="Close Profile"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </header>
+        <ModalHeader
+          title="PLAYER PROFILE"
+          badge="VIP LOUNGE"
+          badgeVariant="yellow"
+          onClose={onClose}
+          closeTitle="Close Profile"
+        />
 
         {/* Main Content */}
         <main className="relative z-10 flex-1 overflow-y-auto custom-scrollbar p-5 space-y-4 w-full">
@@ -421,8 +395,36 @@ export const UserProfileDrawer: React.FC<UserProfileDrawerProps> = ({
               </span>
 
               <div className="space-y-2">
-                {/* Admin Control Center (Only for ADMIN role) */}
-                {user?.role === 'ADMIN' && onOpenAdmin && (
+                {/* Agent Dashboard (Only for AGENT role) */}
+                {user?.role === 'AGENT' && onOpenAdmin && (
+                  <button
+                    onClick={() => {
+                      soundService.playClick();
+                      onClose();
+                      onOpenAdmin();
+                    }}
+                    className="w-full p-3 rounded-xl bg-gradient-to-r from-emerald-500/20 via-teal-500/10 to-emerald-600/20 hover:bg-emerald-500/30 border border-emerald-400/40 flex items-center justify-between transition-all cursor-pointer shadow-[0_0_15px_rgba(16,185,129,0.15)] active:scale-[0.98]"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-xl bg-emerald-400/20 border border-emerald-400/50 text-emerald-400 flex items-center justify-center flex-shrink-0">
+                        <ShieldCheck className="w-4 h-4 stroke-[2.5]" />
+                      </div>
+                      <div className="text-left">
+                        <div className="font-arcade font-black text-xs text-emerald-300 flex items-center gap-1.5">
+                          <span>AGENT DASHBOARD</span>
+                          <span className="text-[8px] font-arcade font-bold px-1.5 py-0.5 rounded bg-emerald-400 text-black">
+                            AGENT
+                          </span>
+                        </div>
+                        <div className="text-[10px] font-arcade text-white/50">Approve deposits, process withdrawals & customer queries</div>
+                      </div>
+                    </div>
+                    <ChevronRight className="w-4 h-4 text-emerald-400" />
+                  </button>
+                )}
+
+                {/* Super Admin Dashboard (For SUPER_ADMIN and legacy ADMIN roles) */}
+                {(user?.role === 'SUPER_ADMIN' || user?.role === 'ADMIN') && onOpenAdmin && (
                   <button
                     onClick={() => {
                       soundService.playClick();
@@ -437,12 +439,12 @@ export const UserProfileDrawer: React.FC<UserProfileDrawerProps> = ({
                       </div>
                       <div className="text-left">
                         <div className="font-arcade font-black text-xs text-amber-300 flex items-center gap-1.5">
-                          <span>ADMIN CONTROL CENTER</span>
+                          <span>SUPER ADMIN DASHBOARD</span>
                           <span className="text-[8px] font-arcade font-bold px-1.5 py-0.5 rounded bg-amber-400 text-black">
-                            SUPERUSER
+                            OWNER
                           </span>
                         </div>
-                        <div className="text-[10px] font-arcade text-white/50">Manage users, approve deposits & withdrawals</div>
+                        <div className="text-[10px] font-arcade text-white/50">Agent governance, finance, weekend jackpot & logs</div>
                       </div>
                     </div>
                     <ChevronRight className="w-4 h-4 text-amber-400" />
@@ -466,10 +468,10 @@ export const UserProfileDrawer: React.FC<UserProfileDrawerProps> = ({
                       <div className="font-arcade font-black text-xs text-white flex items-center gap-1.5">
                         <span>REWARDS & AFFILIATE</span>
                         <span className="text-[8px] font-arcade font-bold px-1.5 py-0.2 rounded bg-[#E8FF00] text-black">
-                          5% CASH
+                          BONUS HUB
                         </span>
                       </div>
-                      <div className="text-[10px] font-arcade text-white/40">7-Day streak rewards & commissions</div>
+                      <div className="text-[10px] font-arcade text-white/40">First deposit, room play & referrals</div>
                     </div>
                   </div>
                   <ChevronRight className="w-4 h-4 text-white/40" />

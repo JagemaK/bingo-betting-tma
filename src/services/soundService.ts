@@ -154,6 +154,13 @@ class SoundService {
   }
 
   /**
+   * Action Victory / Success fanfare
+   */
+  public playVictory() {
+    this.playJackpotFanfare();
+  }
+
+  /**
    * Generic UI Click
    */
   public playClick() {

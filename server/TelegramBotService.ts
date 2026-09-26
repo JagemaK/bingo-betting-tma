@@ -98,15 +98,20 @@ export class TelegramBotService {
     this.isPolling = false;
   }
 
-  public async setWebhook(webhookUrl: string) {
+  public async setWebhook(webhookUrl: string, secretToken?: string) {
     this.botToken = process.env.TELEGRAM_BOT_TOKEN || this.botToken;
     if (!this.botToken) return;
     this.stopPolling();
     try {
-      const data = await this.callTelegramApi('setWebhook', {
+      const secret = secretToken || process.env.TELEGRAM_WEBHOOK_SECRET;
+      const payload: any = {
         url: webhookUrl,
         allowed_updates: ['message', 'callback_query']
-      });
+      };
+      if (secret) {
+        payload.secret_token = secret;
+      }
+      const data = await this.callTelegramApi('setWebhook', payload);
       console.log(`[TelegramBot] Webhook successfully set to ${webhookUrl}:`, data);
     } catch (e) {
       console.error('[TelegramBot] Failed to set webhook:', e);

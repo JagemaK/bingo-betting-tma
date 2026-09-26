@@ -11,12 +11,31 @@ import {
   ArrowLeft,
   ShieldCheck,
   Phone,
-  Clock
+  Clock,
+  Copy,
+  Check
 } from 'lucide-react';
-import { UserAccount, LedgerEntry, PromotionalReward } from '../types/bingo.js';
+import { UserAccount, LedgerEntry, PromotionalReward, PaymentAccount } from '../types/bingo.js';
 import { soundService } from '../services/soundService.js';
 import { telegramSdk } from '../services/telegramSdk.js';
 import { apiUrl } from '../config/api.js';
+import { ModalHeader } from './ModalHeader.js';
+
+export function sanitizePaymentError(rawError?: string, defaultMsg: string = 'Your payment request could not be processed. Please try again.'): string {
+  if (!rawError || typeof rawError !== 'string') return defaultMsg;
+  const lower = rawError.toLowerCase();
+  if (
+    lower.includes('constraint failed') ||
+    lower.includes('sqlite') ||
+    lower.includes('check constraint') ||
+    lower.includes('syntaxerror') ||
+    lower.includes('table ') ||
+    lower.includes('column ')
+  ) {
+    return defaultMsg;
+  }
+  return rawError;
+}
 
 interface WalletModalProps {
   isOpen: boolean;
@@ -26,6 +45,7 @@ interface WalletModalProps {
   onUpdateUser: (user: UserAccount) => void;
   onOpenSignUp?: () => void;
   onOpenLogin?: () => void;
+  socket?: any;
 }
 
 export const WalletModal: React.FC<WalletModalProps> = ({
@@ -34,6 +54,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
   onClose,
   user,
   onUpdateUser,
+  socket,
 }) => {
   const [activeTab, setActiveTab] = useState<'deposit' | 'withdraw' | 'history'>(initialTab);
   const [depositAmount, setDepositAmount] = useState<number | ''>(100);
@@ -45,6 +66,8 @@ export const WalletModal: React.FC<WalletModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [activePaymentAccount, setActivePaymentAccount] = useState<PaymentAccount | null>(null);
+  const [copiedPhone, setCopiedPhone] = useState(false);
   const [activeBonusData, setActiveBonusData] = useState<{
     bonusBalance: number;
     cashBalance: number;
@@ -52,6 +75,20 @@ export const WalletModal: React.FC<WalletModalProps> = ({
     activeReward: PromotionalReward | null;
     timeRemainingSeconds: number;
   } | null>(null);
+
+  const fetchActivePaymentAccount = async () => {
+    try {
+      const res = await fetch(apiUrl('/api/payment/active-account'));
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.account) {
+          setActivePaymentAccount(data.account);
+        }
+      }
+    } catch (e) {
+      // Non-blocking
+    }
+  };
 
   const fetchBonus = async () => {
     try {
@@ -75,6 +112,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       if (initialTab) setActiveTab(initialTab);
+      fetchActivePaymentAccount();
       if (user?.playerId) {
         fetchLedger();
         fetchBonus();
@@ -82,6 +120,20 @@ export const WalletModal: React.FC<WalletModalProps> = ({
       if (user?.phone) setWithdrawAddress(user.phone);
     }
   }, [isOpen, initialTab, user?.playerId, user?.phone, user?.walletBalance, user?.bonusBalance]);
+
+  // Real-time active payment account update
+  useEffect(() => {
+    if (!socket) return;
+    const onActivePayment = (account: PaymentAccount | null) => {
+      if (account) {
+        setActivePaymentAccount(account);
+      }
+    };
+    socket.on('payment:active', onActivePayment);
+    return () => {
+      socket.off('payment:active', onActivePayment);
+    };
+  }, [socket]);
 
   useEffect(() => {
     if (!activeBonusData || activeBonusData.timeRemainingSeconds <= 0) return;
@@ -156,11 +208,11 @@ export const WalletModal: React.FC<WalletModalProps> = ({
         fetchLedger();
       } else {
         soundService.playError();
-        setErrorMsg(data.error || 'Failed to submit deposit request');
+        setErrorMsg(sanitizePaymentError(data.error, 'Failed to submit deposit request. Please try again.'));
       }
     } catch (e: any) {
       soundService.playError();
-      setErrorMsg(e.message || 'Network error submitting deposit');
+      setErrorMsg(sanitizePaymentError(e.message, 'Network error submitting deposit'));
       console.error(e);
     } finally {
       setLoading(false);
@@ -210,11 +262,11 @@ export const WalletModal: React.FC<WalletModalProps> = ({
         fetchLedger();
       } else {
         soundService.playError();
-        setErrorMsg(data.error || 'Failed to submit withdrawal request');
+        setErrorMsg(sanitizePaymentError(data.error, 'Failed to submit withdrawal request. Please try again.'));
       }
     } catch (e: any) {
       soundService.playError();
-      setErrorMsg(e.message || 'Network error submitting withdrawal');
+      setErrorMsg(sanitizePaymentError(e.message, 'Network error submitting withdrawal'));
       console.error(e);
     } finally {
       setLoading(false);
@@ -237,45 +289,18 @@ export const WalletModal: React.FC<WalletModalProps> = ({
         <div className="absolute top-0 inset-x-0 h-32 bg-gradient-to-b from-[#E8FF00]/10 via-transparent to-transparent pointer-events-none" />
 
         {/* Header */}
-        <header className="relative z-20 w-full px-5 py-3.5 bg-[#161616]/90 backdrop-blur-xl border-b border-white/10 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => {
-                soundService.playClick();
-                onClose();
-              }}
-              className="w-8 h-8 rounded-xl bg-[#202020] hover:bg-[#282828] text-white/80 hover:text-white border border-white/10 flex items-center justify-center transition-all cursor-pointer active:scale-95"
-              title="Back"
-            >
-              <ArrowLeft className="w-4 h-4" />
-            </button>
-
-            <div className="flex items-center gap-2">
-              <span className="font-arcade font-black text-base text-white uppercase tracking-wider">
-                BINGO CASHIER
-              </span>
-              <span className="text-[9px] font-arcade font-black px-2 py-0.5 rounded-full bg-[#E8FF00] text-black uppercase">
-                TELEBIRR ONLY
-              </span>
-            </div>
-          </div>
-
-          <button
-            onClick={() => {
-              soundService.playClick();
-              onClose();
-            }}
-            className="w-8 h-8 rounded-full bg-[#202020] hover:bg-[#282828] text-white/60 hover:text-white border border-white/10 transition-all flex items-center justify-center cursor-pointer active:scale-95"
-            title="Close Cashier"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </header>
+        <ModalHeader
+          title="BINGO CASHIER"
+          badge="TELEBIRR ONLY"
+          badgeVariant="yellow"
+          onClose={onClose}
+          closeTitle="Close Cashier"
+        />
 
         {/* Main Content */}
-        <main className="relative z-10 flex-1 overflow-y-auto custom-scrollbar p-5 space-y-4 w-full">
+        <main className="relative z-10 flex-1 overflow-y-auto custom-scrollbar p-3.5 sm:p-5 space-y-3.5 sm:space-y-4 w-full">
         {/* 1. SEPARATED BALANCE DISPLAY */}
-        <div className="p-4 rounded-2xl bg-[#111111] border border-white/10 space-y-2.5 relative overflow-hidden shadow-sm">
+        <div className="p-3.5 sm:p-4 rounded-2xl bg-[#111111] border border-white/10 space-y-2.5 relative overflow-hidden shadow-sm">
           <div className="flex items-center justify-between">
             <span className="text-[10px] font-arcade font-bold text-white/50 uppercase tracking-widest">
               YOUR WALLET BALANCES
@@ -286,7 +311,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                 fetchLedger();
                 fetchBonus();
               }}
-              className="p-1 rounded-lg bg-[#181818] text-white/60 hover:text-white"
+              className="p-1 rounded-lg bg-[#181818] text-white/60 hover:text-white cursor-pointer"
               title="Refresh Balance"
             >
               <RefreshCw className="w-3 h-3" />
@@ -299,10 +324,10 @@ export const WalletModal: React.FC<WalletModalProps> = ({
               <span className="text-[9px] font-arcade font-bold text-white/50 uppercase block">
                 Cash Balance
               </span>
-              <span className="font-arcade font-black text-lg sm:text-xl text-[#E8FF00] tracking-tight block">
+              <span className="font-arcade font-black text-lg sm:text-xl text-[#E8FF00] tracking-tight block truncate">
                 {currentBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ETB
               </span>
-              <span className="text-[8px] font-arcade text-emerald-400 block mt-0.5">
+              <span className="text-[8px] font-arcade text-emerald-400 block mt-0.5 whitespace-nowrap">
                 ● Withdrawable
               </span>
             </div>
@@ -312,15 +337,15 @@ export const WalletModal: React.FC<WalletModalProps> = ({
               <span className="text-[9px] font-arcade font-bold text-amber-400/80 uppercase block flex items-center justify-between">
                 <span>Bonus Balance</span>
                 {activeBonusData && activeBonusData.timeRemainingSeconds > 0 ? (
-                  <span className="text-[8px] px-1 py-0.2 rounded bg-amber-500/20 text-amber-300 font-mono">
+                  <span className="text-[8px] px-1 py-0.2 rounded bg-amber-500/20 text-amber-300 font-mono whitespace-nowrap shrink-0">
                     {formatCountdown(activeBonusData.timeRemainingSeconds)}
                   </span>
                 ) : null}
               </span>
-              <span className="font-arcade font-black text-lg sm:text-xl text-amber-400 tracking-tight block">
+              <span className="font-arcade font-black text-lg sm:text-xl text-amber-400 tracking-tight block truncate">
                 {((user?.bonusBalance ?? activeBonusData?.bonusBalance) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ETB
               </span>
-              <span className="text-[8px] font-arcade text-amber-300/80 block mt-0.5">
+              <span className="text-[8px] font-arcade text-amber-300/80 block mt-0.5 whitespace-nowrap">
                 ● Bingo Cards Only
               </span>
             </div>
@@ -328,8 +353,8 @@ export const WalletModal: React.FC<WalletModalProps> = ({
 
           {/* Total Playable Balance */}
           <div className="pt-2 border-t border-white/5 flex items-center justify-between text-xs font-arcade">
-            <span className="text-white/50 uppercase tracking-wide text-[10px]">Total Playable:</span>
-            <span className="font-black text-white text-sm font-arcade">
+            <span className="text-white/50 uppercase tracking-wide text-[10px] whitespace-nowrap">Total Playable:</span>
+            <span className="font-black text-white text-sm font-arcade whitespace-nowrap">
               {(currentBalance + ((user?.bonusBalance ?? activeBonusData?.bonusBalance) || 0)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ETB
             </span>
           </div>
@@ -339,7 +364,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
             <div className="p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[10px] text-amber-200/90 flex items-start gap-1.5 text-left">
               <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
               <span>
-                <strong>10% Promotional Bonus Active:</strong> Use for Bingo & Daily Grand Jackpot card purchases. Non-withdrawable. Expires exactly 24h after issuance.
+                <strong>10% Promotional Bonus Active:</strong> Use for Bingo & Weekend Jackpot card purchases. Non-withdrawable. Expires exactly 24h after issuance.
               </span>
             </div>
           )}
@@ -354,14 +379,14 @@ export const WalletModal: React.FC<WalletModalProps> = ({
               setSuccessMsg(null);
               setErrorMsg(null);
             }}
-            className={`py-2 text-xs rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer font-arcade font-black uppercase ${
+            className={`py-2 px-1 text-[11px] sm:text-xs rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer font-arcade font-black uppercase whitespace-nowrap min-w-0 ${
               activeTab === 'deposit'
                 ? 'bg-[#E8FF00] text-black shadow-[0_0_10px_rgba(232,255,0,0.3)]'
                 : 'text-white/60 hover:text-white'
             }`}
           >
-            <ArrowDownLeft className="w-3.5 h-3.5 stroke-[3]" />
-            <span>DEPOSIT</span>
+            <ArrowDownLeft className="w-3.5 h-3.5 stroke-[3] shrink-0" />
+            <span className="truncate whitespace-nowrap">DEPOSIT</span>
           </button>
 
           <button
@@ -371,14 +396,14 @@ export const WalletModal: React.FC<WalletModalProps> = ({
               setSuccessMsg(null);
               setErrorMsg(null);
             }}
-            className={`py-2 text-xs rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer font-arcade font-black uppercase ${
+            className={`py-2 px-1 text-[11px] sm:text-xs rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer font-arcade font-black uppercase whitespace-nowrap min-w-0 ${
               activeTab === 'withdraw'
                 ? 'bg-[#E8FF00] text-black shadow-[0_0_10px_rgba(232,255,0,0.3)]'
                 : 'text-white/60 hover:text-white'
             }`}
           >
-            <ArrowUpRight className="w-3.5 h-3.5 stroke-[3]" />
-            <span>WITHDRAW</span>
+            <ArrowUpRight className="w-3.5 h-3.5 stroke-[3] shrink-0" />
+            <span className="truncate whitespace-nowrap">WITHDRAW</span>
           </button>
 
           <button
@@ -388,14 +413,14 @@ export const WalletModal: React.FC<WalletModalProps> = ({
               setSuccessMsg(null);
               setErrorMsg(null);
             }}
-            className={`py-2 text-xs rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer font-arcade font-black uppercase ${
+            className={`py-2 px-1 text-[11px] sm:text-xs rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer font-arcade font-black uppercase whitespace-nowrap min-w-0 ${
               activeTab === 'history'
                 ? 'bg-[#E8FF00] text-black shadow-[0_0_10px_rgba(232,255,0,0.3)]'
                 : 'text-white/60 hover:text-white'
             }`}
           >
-            <History className="w-3.5 h-3.5 stroke-[3]" />
-            <span>LEDGER</span>
+            <History className="w-3.5 h-3.5 stroke-[3] shrink-0" />
+            <span className="truncate whitespace-nowrap">LEDGER</span>
           </button>
         </div>
 
@@ -443,14 +468,50 @@ export const WalletModal: React.FC<WalletModalProps> = ({
               </span>
             </div>
 
-            {/* Step-by-Step Instructions */}
-            <div className="p-3 rounded-xl bg-[#161616] border border-white/10 space-y-1 text-[11px] text-white/70">
-              <div className="text-[10px] font-arcade font-black text-[#E8FF00] uppercase">
-                TELEBIRR PAYMENT INSTRUCTIONS:
+            {/* Dynamic Active Telebirr Payment Card */}
+            <div className="p-3.5 rounded-2xl bg-[#141414] border border-emerald-500/30 space-y-2.5 text-left">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-arcade font-bold text-white/50 uppercase tracking-widest">
+                  DEPOSIT VIA TELEBIRR
+                </span>
+                <span className="text-[9px] font-arcade font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                  ACTIVE NUMBER
+                </span>
               </div>
-              <div>1. Transfer <strong className="text-white">{numDeposit} ETB</strong> via Telebirr (*127# or SuperApp).</div>
-              <div>2. Enter the <strong className="text-[#E8FF00]">Telebirr Transaction Reference ID</strong> below.</div>
-              <div>3. Tap Submit. Funds are credited immediately once verified.</div>
+
+              <div className="p-3 rounded-xl bg-[#1a1a1a] border border-white/10 flex items-center justify-between">
+                <div>
+                  <div className="text-[9px] font-arcade font-bold text-white/40 uppercase">Send your payment to:</div>
+                  <div className="font-arcade font-black text-xl text-[#E8FF00] tracking-wider select-all">
+                    {activePaymentAccount?.phone_number || '0912345678'}
+                  </div>
+                  <div className="text-[10px] font-arcade text-white/70 mt-0.5">
+                    Account Name: <strong className="text-white">{activePaymentAccount?.account_name || 'Official Platform Account'}</strong>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const phoneToCopy = activePaymentAccount?.phone_number || '0912345678';
+                    navigator.clipboard.writeText(phoneToCopy);
+                    setCopiedPhone(true);
+                    soundService.playClick();
+                    setTimeout(() => setCopiedPhone(false), 2000);
+                  }}
+                  className="px-2.5 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 text-[10px] font-arcade font-bold flex items-center gap-1.5 transition-all cursor-pointer border border-emerald-500/40"
+                  title="Copy Phone Number"
+                >
+                  {copiedPhone ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copiedPhone ? 'COPIED' : 'COPY'}</span>
+                </button>
+              </div>
+
+              <div className="text-[11px] text-white/70 space-y-1 bg-black/30 p-2.5 rounded-xl border border-white/5">
+                <div>{activePaymentAccount?.instructions || `1. Transfer ${numDeposit} ETB via Telebirr (*127# or Telebirr SuperApp) to the number above.`}</div>
+                <div className="text-[10px] text-amber-300/90 font-arcade">
+                  ● After completing the Telebirr payment, enter your transaction/reference number below.
+                </div>
+              </div>
             </div>
 
             {/* Fast Preset Deposit Buttons */}
@@ -664,11 +725,11 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                     </div>
                   </div>
                   <div className={`font-arcade font-black text-xs ${
-                    entry.type === 'win_payout' || entry.type === 'deposit'
+                    entry.type === 'win_payout' || entry.type === 'deposit' || entry.type === 'refund' || entry.type === 'bonus'
                       ? 'text-[#E8FF00]'
                       : 'text-rose-400'
                   }`}>
-                    {entry.type === 'buy_in' ? '-' : '+'}
+                    {entry.type === 'buy_in' || entry.type === 'withdrawal' || entry.type === 'escrow_hold' || entry.type === 'loss' ? '-' : '+'}
                     {((entry.amount ?? 0)).toLocaleString()} BIRR
                   </div>
                 </div>

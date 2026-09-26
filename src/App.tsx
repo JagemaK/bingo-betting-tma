@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
 import confetti from 'canvas-confetti';
 import {
@@ -43,6 +43,8 @@ import { LobbyView } from './components/LobbyView.js';
 import { AuthModal, AuthModalMode } from './components/AuthModal.js';
 import { UserProfileDrawer } from './components/UserProfileDrawer.js';
 import { AdminDashboardModal } from './components/AdminDashboardModal.js';
+import { AgentDashboardModal } from './components/AgentDashboardModal.js';
+import { SuperAdminDashboardModal } from './components/SuperAdminDashboardModal.js';
 import { DailyJackpotModal } from './components/DailyJackpotModal.js';
 import { DailyJackpotEntryView } from './components/DailyJackpotEntryView.js';
 import { soundService } from './services/soundService.js';
@@ -72,7 +74,7 @@ export default function App() {
 
   // Modals & Drawer State
   const [activeModal, setActiveModal] = useState<
-    'wallet' | 'provablyFair' | 'rules' | 'leaderboard' | 'referral' | 'contact' | 'admin' | 'daily_jackpot' | null
+    'wallet' | 'provablyFair' | 'rules' | 'leaderboard' | 'referral' | 'contact' | 'admin' | 'agent' | 'super_admin' | 'daily_jackpot' | null
   >(null);
   const [dailyJackpotState, setDailyJackpotState] = useState<DailyJackpotPublicState | null>(null);
   const [walletInitialTab, setWalletInitialTab] = useState<'deposit' | 'withdraw' | 'history'>('deposit');
@@ -110,6 +112,35 @@ export default function App() {
   useEffect(() => {
     setUser(auth.user || null);
   }, [auth.user]);
+
+  // State-driven notification dot for claimable rewards
+  const [hasClaimableReward, setHasClaimableReward] = useState<boolean>(false);
+
+  const refreshRewardsClaimable = useCallback(async () => {
+    if (!user?.playerId) {
+      setHasClaimableReward(false);
+      return;
+    }
+    try {
+      const token = auth.sessionToken || localStorage.getItem('bingo_auth_token') || localStorage.getItem('token');
+      const res = await fetch(apiUrl('/api/rewards'), {
+        headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const firstDepositClaimable = data.firstDeposit?.status === 'CLAIMABLE';
+        const roomClaimable = Array.isArray(data.roomRewards) && data.roomRewards.some((r: any) => r.availableBlocks > 0);
+        const referralClaimable = (data.referralRewards?.availableRewardAmount || 0) > 0;
+        setHasClaimableReward(firstDepositClaimable || roomClaimable || referralClaimable);
+      }
+    } catch {
+      // Non-blocking
+    }
+  }, [user?.playerId, auth.sessionToken]);
+
+  useEffect(() => {
+    refreshRewardsClaimable();
+  }, [refreshRewardsClaimable, user?.walletBalance, user?.bonusBalance]);
 
   // If Telegram reports NEW_USER or REGISTRATION_REQUIRED, prompt user to complete profile
   useEffect(() => {
@@ -193,6 +224,18 @@ export default function App() {
     }
     setWalletInitialTab('history');
     setActiveModal('wallet');
+  };
+
+  const handleOpenAdmin = () => {
+    soundService.playClick();
+    telegramSdk.triggerHaptic('medium');
+    if (user?.role === 'AGENT') {
+      setActiveModal('agent');
+    } else if (user?.role === 'SUPER_ADMIN' || user?.role === 'ADMIN') {
+      setActiveModal('super_admin');
+    } else {
+      setActiveModal('admin');
+    }
   };
 
   // Initialize Telegram SDK & Lobby Rooms
@@ -735,10 +778,11 @@ export default function App() {
           onOpenLogin={handleOpenLogin}
           onOpenProfile={handleOpenProfile}
           onOpenMenu={handleOpenProfile}
-          onOpenAdmin={() => setActiveModal('admin')}
+          onOpenAdmin={handleOpenAdmin}
           onRefresh={() => {
             fetch(apiUrl('/api/rooms')).then(r => r.json()).then(d => d.rooms && setRooms(d.rooms));
           }}
+          hasRewardNotification={hasClaimableReward}
         />
       )}
 
@@ -764,8 +808,9 @@ export default function App() {
           onOpenSignUp={() => handleOpenSignUp('register')}
           onOpenLogin={handleOpenLogin}
           onOpenProfile={handleOpenProfile}
-          onOpenAdmin={() => setActiveModal('admin')}
+          onOpenAdmin={handleOpenAdmin}
           onSelectCurrency={setCurrency}
+          hasRewardNotification={hasClaimableReward}
           onRefresh={() => {
             if (activeRoomId) {
               fetch(apiUrl(`/api/room/${activeRoomId}`)).then(r => r.json()).then(d => d && setGameState(d));
@@ -801,7 +846,7 @@ export default function App() {
             onOpenLogin={handleOpenLogin}
             onOpenProfile={handleOpenProfile}
             onOpenMenu={handleOpenProfile}
-            onOpenAdmin={() => setActiveModal('admin')}
+            onOpenAdmin={handleOpenAdmin}
           />
 
           {/* Main Live Stage */}
@@ -973,17 +1018,17 @@ export default function App() {
                 </span>
               </button>
             ) : (
-              <div className="flex items-center justify-between text-xs px-2 py-0.5 text-slate-400">
-                <div className="flex items-center gap-1.5 font-semibold">
-                  <span className="text-white">{userTickets.length} Cards Active</span>
+              <div className="flex items-center justify-between text-xs px-2 py-0.5 text-slate-400 min-w-0 gap-2">
+                <div className="flex items-center gap-1.5 font-semibold min-w-0 truncate">
+                  <span className="text-white truncate">{userTickets.length} Cards Active</span>
                   <span>•</span>
-                  <span className="font-mono text-amber-300">
+                  <span className="font-mono text-amber-300 shrink-0 whitespace-nowrap">
                     Bet: {formatStakeDisplay(userTickets.length * (gameState?.betPerCard || 10))}
                   </span>
                 </div>
-                <div className="flex items-center gap-1 font-mono font-bold">
-                  <Trophy className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
-                  <span className="text-emerald-400">Prize: {formatStakeDisplay(gameState?.winnerPayoutAmount || 0)} ({gameState?.winnerPayoutPercent || 80}%)</span>
+                <div className="flex items-center gap-1 font-mono font-bold shrink-0 whitespace-nowrap">
+                  <Trophy className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                  <span className="text-emerald-400">Prize: {formatStakeDisplay(gameState?.winnerPayoutAmount || 0)}</span>
                 </div>
               </div>
             )}
@@ -1000,7 +1045,7 @@ export default function App() {
           onBack={() => setCurrentView('lobby')}
           onOpenDeposit={handleOpenDeposit}
           onOpenSignUp={() => handleOpenSignUp('register')}
-          onOpenAdmin={() => setActiveModal('admin')}
+          onOpenAdmin={handleOpenAdmin}
           onUpdateUser={(updatedUser) => {
             setUser(updatedUser);
             auth.updateUser(updatedUser);
@@ -1023,6 +1068,7 @@ export default function App() {
         onUpdateUser={(updated) => setUser(updated)}
         onOpenSignUp={() => handleOpenSignUp('register')}
         onOpenLogin={handleOpenLogin}
+        socket={socket}
       />
 
       <AuthModal
@@ -1047,7 +1093,7 @@ export default function App() {
         onOpenLogin={handleOpenLogin}
         onOpenSignUp={() => handleOpenSignUp('register')}
         onLogout={handleLogout}
-        onOpenAdmin={() => setActiveModal('admin')}
+        onOpenAdmin={handleOpenAdmin}
       />
 
       <ProvablyFairModal
@@ -1100,11 +1146,15 @@ export default function App() {
 
       <ReferralModal
         isOpen={activeModal === 'referral'}
-        onClose={() => setActiveModal(null)}
+        onClose={() => {
+          setActiveModal(null);
+          refreshRewardsClaimable();
+        }}
         user={user}
         currency={currency}
         onUpdateUser={(updated) => setUser(updated)}
         onOpenSignUp={() => handleOpenSignUp('register')}
+        onClaimSuccess={refreshRewardsClaimable}
       />
 
       <ContactModal
@@ -1112,8 +1162,24 @@ export default function App() {
         onClose={() => setActiveModal(null)}
       />
 
+      <AgentDashboardModal
+        isOpen={activeModal === 'agent' || (activeModal === 'admin' && user?.role === 'AGENT')}
+        onClose={() => setActiveModal(null)}
+        user={user}
+        token={auth.sessionToken || localStorage.getItem('bingo_auth_token') || ''}
+        socket={socket}
+      />
+
+      <SuperAdminDashboardModal
+        isOpen={activeModal === 'super_admin' || (activeModal === 'admin' && (user?.role === 'SUPER_ADMIN' || user?.role === 'ADMIN'))}
+        onClose={() => setActiveModal(null)}
+        user={user}
+        token={auth.sessionToken || localStorage.getItem('bingo_auth_token') || ''}
+        socket={socket}
+      />
+
       <AdminDashboardModal
-        isOpen={activeModal === 'admin'}
+        isOpen={activeModal === 'admin' && user?.role !== 'AGENT' && user?.role !== 'SUPER_ADMIN' && user?.role !== 'ADMIN'}
         onClose={() => setActiveModal(null)}
         user={user}
         token={auth.sessionToken || localStorage.getItem('bingo_auth_token') || ''}

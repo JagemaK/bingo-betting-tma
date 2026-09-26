@@ -121,15 +121,15 @@ describe('Daily Grand Jackpot Compact UI & Floating Top Header Suite', () => {
     expect(html).not.toContain('100,000 BIRR');
 
     // Must contain essential jackpot data
-    expect(html).toContain('DAILY GRAND JACKPOT');
-    expect(html).toContain('OFFICIAL 12:00 PM DRAW');
+    expect(html).toContain('WEEKEND JACKPOT');
+    expect(html).toContain('OFFICIAL SUNDAY 10:00 AM DRAW');
     expect(html).toContain('POSTPONED · NEXT DRAW 12:00 PM');
     expect(html).toContain('0 / 200');
     expect(html).toContain('Min to Draw: 100');
     expect(html).toContain('999 Birr / Card');
     expect(html).toContain('Max: 200');
     expect(html).toContain('Next Draw:');
-    expect(html).toContain('Daily 12:00 PM');
+    expect(html).toContain('Sunday 10:00 AM');
     expect(html).toContain('ENTER JACKPOT →');
   });
 
@@ -362,8 +362,8 @@ describe('Daily Grand Jackpot Compact UI & Floating Top Header Suite', () => {
 
     // 1. Back button & Title
     expect(html).toContain('BACK');
-    expect(html).toContain('DAILY GRAND JACKPOT');
-    expect(html).toContain('Cutoff: 12:00 PM Addis Ababa');
+    expect(html).toContain('WEEKEND JACKPOT');
+    expect(html).toContain('Cutoff: Sunday 10:00 AM Addis Ababa');
 
     // 2. Guaranteed Payout & Price
     expect(html).toContain('150,000 BIRR');

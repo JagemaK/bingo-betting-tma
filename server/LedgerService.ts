@@ -1,7 +1,8 @@
+import crypto from 'crypto';
 import { databaseService, LedgerRow, DepositRow, WithdrawalRow, AuditRow } from './DatabaseService.js';
 
-export type UserRole = 'USER' | 'ADMIN';
-export type AccountStatus = 'ACTIVE' | 'SUSPENDED' | 'BANNED';
+export type UserRole = 'USER' | 'AGENT' | 'SUPER_ADMIN' | 'ADMIN';
+export type AccountStatus = 'ACTIVE' | 'SUSPENDED' | 'BANNED' | 'DEACTIVATED' | 'DELETION_REQUESTED' | 'DELETED';
 
 export interface UserAccount {
   id?: string;
@@ -18,7 +19,10 @@ export interface UserAccount {
   registration_status?: string;
   role?: UserRole;
   account_status?: AccountStatus;
+  account_type?: 'REAL' | 'GUEST' | 'BOT' | 'TEST' | 'ADMIN' | 'AGENT';
   phone?: string;
+  telebirrNumber?: string;
+  assignedAgentName?: string;
 }
 
 export type LedgerTransactionType =
@@ -59,6 +63,10 @@ export interface DepositRequest {
   processedAt?: string;
   processedBy?: string;
   rejectionReason?: string;
+  paymentAccountId?: string;
+  paymentPhone?: string;
+  assignedAgentId?: string;
+  customerPhone?: string;
 }
 
 export interface WithdrawalRequest {
@@ -73,6 +81,8 @@ export interface WithdrawalRequest {
   processedAt?: string;
   processedBy?: string;
   rejectionReason?: string;
+  assignedAgentId?: string;
+  customerPhone?: string;
 }
 
 export interface AuditLogRecord {
@@ -114,6 +124,7 @@ export class LedgerService {
       case 'bonus': return 'BONUS';
       case 'loss': return 'LOSS';
       case 'adjustment': return 'ADMIN_ADJUSTMENT';
+      case 'escrow_hold': return 'ESCROW_HOLD';
       default: return 'ADMIN_ADJUSTMENT';
     }
   }
@@ -137,6 +148,7 @@ export class LedgerService {
       totalPlayableBalance,
       avatarUrl: userRow.avatar_url,
       isBot: Boolean(userRow.is_bot),
+      account_type: userRow.account_type || 'REAL',
       registration_status: userRow.registration_status,
       role: userRow.role,
       account_status: userRow.account_status,
@@ -149,7 +161,8 @@ export class LedgerService {
     username: string,
     avatarUrl?: string,
     role: UserRole = 'USER',
-    initialBalance: number = 0.00
+    initialBalance: number = 0.00,
+    accountType?: 'REAL' | 'GUEST' | 'BOT' | 'TEST' | 'ADMIN'
   ): UserAccount {
     let existing = this.getUser(playerId);
     if (existing) {
@@ -158,7 +171,8 @@ export class LedgerService {
 
     // Create user in database
     const telegramId = playerId.startsWith('tg_') ? playerId.substring(3) : playerId;
-    const refCode = `REF_${username.replace(/[^A-Z0-9]/gi, '').toUpperCase().slice(0, 5)}_${Math.floor(Math.random() * 899 + 100)}`;
+    const refCode = `REF_${username.replace(/[^A-Z0-9]/gi, '').toUpperCase().slice(0, 5)}_${crypto.randomInt(100, 1000)}`;
+    const effectiveType = accountType || (role === 'ADMIN' ? 'ADMIN' : (playerId.startsWith('usr_000') ? 'BOT' : (playerId.startsWith('usr_e2e_') ? 'TEST' : (username.startsWith('Player_') ? 'GUEST' : 'REAL'))));
 
     try {
       databaseService.createUser({
@@ -168,7 +182,8 @@ export class LedgerService {
         referral_code: refCode,
         role,
         avatar_url: avatarUrl,
-        is_bot: false
+        account_type: effectiveType,
+        is_bot: effectiveType === 'BOT'
       });
 
       if (initialBalance > 0) {
@@ -267,7 +282,10 @@ export class LedgerService {
       createdAt: row.created_at,
       processedAt: row.processed_at,
       processedBy: row.processed_by,
-      rejectionReason: row.rejection_reason
+      rejectionReason: row.rejection_reason,
+      paymentAccountId: row.payment_account_id,
+      paymentPhone: row.payment_phone,
+      assignedAgentId: row.assigned_agent_id
     };
   }
 
@@ -284,7 +302,11 @@ export class LedgerService {
       createdAt: r.created_at,
       processedAt: r.processed_at,
       processedBy: r.processed_by,
-      rejectionReason: r.rejection_reason
+      rejectionReason: r.rejection_reason,
+      paymentAccountId: r.payment_account_id,
+      paymentPhone: r.payment_phone,
+      assignedAgentId: r.assigned_agent_id,
+      customerPhone: (r as any).customer_phone
     }));
   }
 
@@ -305,7 +327,11 @@ export class LedgerService {
         createdAt: deposit.created_at,
         processedAt: deposit.processed_at,
         processedBy: deposit.processed_by,
-        rejectionReason: deposit.rejection_reason
+        rejectionReason: deposit.rejection_reason,
+        paymentAccountId: deposit.payment_account_id,
+        paymentPhone: deposit.payment_phone,
+        assignedAgentId: deposit.assigned_agent_id,
+        customerPhone: (deposit as any).customer_phone
       },
       entry: {
         id: entry.id,
@@ -336,7 +362,11 @@ export class LedgerService {
       createdAt: deposit.created_at,
       processedAt: deposit.processed_at,
       processedBy: deposit.processed_by,
-      rejectionReason: deposit.rejection_reason
+      rejectionReason: deposit.rejection_reason,
+      paymentAccountId: deposit.payment_account_id,
+      paymentPhone: deposit.payment_phone,
+      assignedAgentId: deposit.assigned_agent_id,
+      customerPhone: (deposit as any).customer_phone
     };
   }
 
@@ -360,7 +390,8 @@ export class LedgerService {
       createdAt: row.created_at,
       processedAt: row.processed_at,
       processedBy: row.processed_by,
-      rejectionReason: row.rejection_reason
+      rejectionReason: row.rejection_reason,
+      assignedAgentId: row.assigned_agent_id
     };
   }
 
@@ -377,7 +408,9 @@ export class LedgerService {
       createdAt: r.created_at,
       processedAt: r.processed_at,
       processedBy: r.processed_by,
-      rejectionReason: r.rejection_reason
+      rejectionReason: r.rejection_reason,
+      assignedAgentId: r.assigned_agent_id,
+      customerPhone: (r as any).customer_phone
     }));
   }
 
@@ -398,7 +431,9 @@ export class LedgerService {
         createdAt: withdrawal.created_at,
         processedAt: withdrawal.processed_at,
         processedBy: withdrawal.processed_by,
-        rejectionReason: withdrawal.rejection_reason
+        rejectionReason: withdrawal.rejection_reason,
+        assignedAgentId: withdrawal.assigned_agent_id,
+        customerPhone: (withdrawal as any).customer_phone
       },
       entry: {
         id: entry.id,
@@ -428,7 +463,9 @@ export class LedgerService {
       createdAt: withdrawal.created_at,
       processedAt: withdrawal.processed_at,
       processedBy: withdrawal.processed_by,
-      rejectionReason: withdrawal.rejection_reason
+      rejectionReason: withdrawal.rejection_reason,
+      assignedAgentId: withdrawal.assigned_agent_id,
+      customerPhone: (withdrawal as any).customer_phone
     };
   }
 
@@ -480,17 +517,29 @@ export class LedgerService {
     amount: number,
     reason: string
   ): Promise<{ user: UserAccount; entry: LedgerEntry }> {
+    if (typeof amount !== 'number' || !Number.isFinite(amount) || Number.isNaN(amount)) {
+      throw new Error('Adjustment amount must be a valid finite number');
+    }
+    const cleanAmount = Math.round(amount * 100) / 100;
+    if (cleanAmount === 0) {
+      throw new Error('Adjustment amount cannot be zero');
+    }
+
     const user = this.getUser(targetPlayerId);
     if (!user) throw new Error('Target user not found');
+
+    if (adminId && targetPlayerId && String(adminId).trim() === String(targetPlayerId).trim()) {
+      throw new Error('Self-adjustment forbidden: Cannot adjust your own balance');
+    }
 
     const entry = await this.recordTransaction(
       targetPlayerId,
       'adjustment',
-      amount,
+      cleanAmount,
       `Manual Balance Adjustment by Admin (${reason})`,
       undefined,
       undefined,
-      `adj_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`
+      `adj_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`
     );
 
     this.recordAuditLog(

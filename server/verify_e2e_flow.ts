@@ -1,5 +1,8 @@
-import { databaseService } from './DatabaseService.js';
+process.env.IS_TEST_SCRIPT = 'true';
+import { DatabaseService } from './DatabaseService.js';
 import { RewardService } from './RewardService.js';
+
+const databaseService = new DatabaseService(':memory:');
 
 async function main() {
   console.log('=====================================================');

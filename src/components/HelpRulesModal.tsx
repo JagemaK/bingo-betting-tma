@@ -1,6 +1,7 @@
 import React from 'react';
-import { HelpCircle, Grid, Trophy, ShieldCheck, Zap, X, ArrowLeft, Sparkles } from 'lucide-react';
+import { HelpCircle, Grid, Trophy, ShieldCheck, Zap, Sparkles } from 'lucide-react';
 import { soundService } from '../services/soundService.js';
+import { ModalHeader } from './ModalHeader.js';
 
 interface HelpRulesModalProps {
   isOpen: boolean;
@@ -17,40 +18,13 @@ export const HelpRulesModal: React.FC<HelpRulesModalProps> = ({ isOpen, onClose 
         <div className="absolute top-0 inset-x-0 h-32 bg-gradient-to-b from-[#E8FF00]/10 via-transparent to-transparent pointer-events-none" />
 
         {/* Header */}
-        <header className="relative z-20 w-full px-5 py-3.5 bg-[#161616]/90 backdrop-blur-xl border-b border-white/10 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => {
-                soundService.playClick();
-                onClose();
-              }}
-              className="w-8 h-8 rounded-xl bg-[#202020] hover:bg-[#282828] text-white/80 hover:text-white border border-white/10 flex items-center justify-center transition-all cursor-pointer active:scale-95"
-              title="Back to Game"
-            >
-              <ArrowLeft className="w-4 h-4" />
-            </button>
-
-            <div className="flex items-center gap-2">
-              <span className="font-arcade font-black text-base text-white uppercase tracking-wider">
-                RULES & PAYOUTS
-              </span>
-              <span className="text-[9px] font-arcade font-black px-2 py-0.5 rounded-full bg-[#E8FF00] text-black uppercase">
-                75-BALL CASINO
-              </span>
-            </div>
-          </div>
-
-          <button
-            onClick={() => {
-              soundService.playClick();
-              onClose();
-            }}
-            className="w-8 h-8 rounded-full bg-[#202020] hover:bg-[#282828] text-white/60 hover:text-white border border-white/10 transition-all flex items-center justify-center cursor-pointer active:scale-95"
-            title="Close Rules"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </header>
+        <ModalHeader
+          title="RULES & PAYOUTS"
+          badge="75-BALL CASINO"
+          badgeVariant="yellow"
+          onClose={onClose}
+          closeTitle="Close Rules"
+        />
 
         {/* Main Content */}
         <main className="relative z-10 flex-1 overflow-y-auto custom-scrollbar p-5 space-y-4 w-full">

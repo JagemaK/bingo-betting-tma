@@ -39,6 +39,7 @@ interface LobbyViewProps {
   onOpenMenu?: () => void;
   onOpenAdmin?: () => void;
   onRefresh: () => void;
+  hasRewardNotification?: boolean;
 }
 
 type FilterTab = 'all' | 'low' | 'high' | 'fast';
@@ -60,6 +61,7 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
   onOpenMenu,
   onOpenAdmin,
   onRefresh,
+  hasRewardNotification = false,
 }) => {
   const [activeFilter, setActiveFilter] = useState<FilterTab>('all');
   const formatCurrency = (val: number) => `${((val ?? 0)).toLocaleString()} Birr`;
@@ -74,11 +76,11 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
   const minCards = dailyJackpotState?.minCards || 100;
   const progressPercent = Math.min(100, Math.max(0, Math.round((cardsSold / maxCards) * 100)));
   const userTicketsCount = dailyJackpotState?.myTickets?.length || 0;
-  const isPostponed = Boolean(dailyJackpotState?.isPostponed || dailyJackpotState?.status === 'POSTPONED');
+  const isPostponed = Boolean(dailyJackpotState?.isPostponed || (dailyJackpotState?.status === 'POSTPONED' && cardsSold < 100));
   const jackpotStatus = dailyJackpotState?.status || (isPostponed ? 'POSTPONED' : 'REGISTRATION_OPEN');
 
   const renderJackpotStatusBadge = () => {
-    if (isPostponed || jackpotStatus === 'POSTPONED') {
+    if (isPostponed || (jackpotStatus === 'POSTPONED' && cardsSold < 100)) {
       return (
         <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 text-[10px] sm:text-xs font-arcade font-bold tracking-wide shrink-0">
           <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
@@ -173,11 +175,11 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
       {/* Main Content Area */}
       <main className="w-full max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 pt-2.5 sm:pt-4 pb-24 space-y-3 sm:space-y-4 flex-1 relative z-10">
         {/* ══════════════════════════════════════════════════ */}
-        {/* COMPACT EVENT BANNER: DAILY GRAND JACKPOT (12:00 PM) */}
+        {/* COMPACT EVENT BANNER: WEEKEND JACKPOT (Sunday 10:00 AM) */}
         {/* ══════════════════════════════════════════════════ */}
         <section 
           className="relative rounded-2xl sm:rounded-3xl p-3.5 sm:p-4 md:p-5 overflow-hidden border border-amber-500/35 bg-gradient-to-br from-[#1a1303] via-[#111111] to-[#0c0c0c] shadow-[0_0_25px_rgba(245,158,11,0.18)] flex flex-col gap-2.5 sm:gap-3 w-full"
-          aria-label="Daily Grand Jackpot"
+          aria-label="Weekend Jackpot"
         >
           {/* Subtle ambient glows (pointer-events-none, strictly behind content) */}
           <div className="absolute -top-10 -right-10 w-36 h-36 bg-amber-500/[0.07] rounded-full blur-2xl pointer-events-none -z-0" />
@@ -187,7 +189,7 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
           <div className="relative z-10 flex flex-wrap items-center justify-between gap-1.5 sm:gap-2 w-full">
             <div className="inline-flex items-center gap-1.5 text-[10px] sm:text-xs font-arcade font-black text-amber-400 uppercase tracking-wider">
               <Zap className="w-3.5 h-3.5 text-amber-400 fill-current shrink-0" />
-              <span>OFFICIAL 12:00 PM DRAW</span>
+              <span>OFFICIAL SUNDAY 10:00 AM DRAW</span>
             </div>
             
             {/* Status Badge in natural flow */}
@@ -198,7 +200,7 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
           <div className="relative z-10 flex flex-col sm:flex-row sm:items-baseline justify-between gap-1 sm:gap-3">
             <div className="min-w-0">
               <h2 className="font-arcade text-lg sm:text-xl md:text-2xl font-black text-white tracking-tight uppercase leading-tight">
-                DAILY GRAND JACKPOT
+                WEEKEND JACKPOT
               </h2>
 
               {/* User Participation Pill (if user has active cards) */}
@@ -249,7 +251,7 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
           <div className="relative z-10 flex flex-col xs:flex-row items-stretch xs:items-center justify-between gap-2 pt-0.5">
             <div className="flex items-center gap-1.5 text-[10px] sm:text-xs text-white/70 font-arcade shrink-0">
               <Clock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-              <span>Next Draw: <strong className="text-white">Daily 12:00 PM</strong></span>
+              <span>Next Draw: <strong className="text-white">Sunday 10:00 AM</strong></span>
             </div>
 
             <button
@@ -382,18 +384,18 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
                 </div>
 
                 {/* ── ROW 2: ROOM NAME & BADGE & SUBTITLE ── */}
-                <div className="mb-3 space-y-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="font-arcade font-black text-base text-white uppercase tracking-tight">
+                <div className="mb-3 space-y-1 min-w-0">
+                  <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap min-w-0">
+                    <h3 className="font-arcade font-black text-sm sm:text-base text-white uppercase tracking-tight truncate whitespace-nowrap min-w-0">
                       {room.roomName}
                     </h3>
                     {room.badge && (
-                      <span className="text-[9px] font-arcade font-extrabold px-2 py-0.5 rounded-full bg-[#E8FF00]/15 text-[#E8FF00] border border-[#E8FF00]/30 uppercase whitespace-nowrap">
+                      <span className="text-[9px] font-arcade font-extrabold px-2 py-0.5 rounded-full bg-[#E8FF00]/15 text-[#E8FF00] border border-[#E8FF00]/30 uppercase whitespace-nowrap shrink-0">
                         {room.badge}
                       </span>
                     )}
                   </div>
-                  <div className="font-arcade text-xs text-white/50 flex items-center gap-2">
+                  <div className="font-arcade text-[11px] sm:text-xs text-white/50 flex items-center gap-1.5 sm:gap-2 truncate whitespace-nowrap">
                     <span>200 CARDS MAX</span>
                     <span>·</span>
                     <span className="text-[#E8FF00] font-bold">1ST BINGO 80-100%</span>
@@ -401,24 +403,24 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
                 </div>
 
                 {/* ── ROW 3: CARDS SOLD COUNTER & DRAW READINESS ── */}
-                <div className="flex items-center justify-between font-arcade text-xs px-3.5 py-2.5 rounded-xl bg-[#161616] border border-white/5 mb-4 whitespace-nowrap">
-                  <div className="flex items-center gap-2 text-white/70">
-                    <Users className="w-3.5 h-3.5 text-[#E8FF00] flex-shrink-0" />
-                    <span>CARDS: <strong className="text-white">{room.totalCardsSold} / 200</strong></span>
+                <div className="flex items-center justify-between font-arcade text-xs px-3.5 py-2.5 rounded-xl bg-[#161616] border border-white/5 mb-4 whitespace-nowrap min-w-0">
+                  <div className="flex items-center gap-2 text-white/70 min-w-0 truncate">
+                    <Users className="w-3.5 h-3.5 text-[#E8FF00] shrink-0" />
+                    <span className="truncate">CARDS: <strong className="text-white">{room.totalCardsSold} / 200</strong></span>
                   </div>
 
-                  <span className={`font-bold ${room.totalCardsSold >= (room.minCardsToStart || 5) ? 'text-[#E8FF00]' : 'text-white/40'}`}>
+                  <span className={`font-bold shrink-0 ${room.totalCardsSold >= (room.minCardsToStart || 5) ? 'text-[#E8FF00]' : 'text-white/40'}`}>
                     {room.totalCardsSold >= (room.minCardsToStart || 5) ? 'READY TO DRAW' : 'MIN 5 CARDS'}
                   </span>
                 </div>
 
                 {/* ── ROW 4: ESTIMATED PRIZE & ACTION BUTTON ── */}
-                <div className="flex items-center justify-between pt-3 border-t border-white/10 gap-2 whitespace-nowrap">
-                  <div className="min-w-0">
-                    <span className="font-arcade text-[10px] uppercase font-bold text-white/40 block leading-tight whitespace-nowrap">
+                <div className="flex items-center justify-between pt-3 border-t border-white/10 gap-2 whitespace-nowrap min-w-0">
+                  <div className="min-w-0 flex-1">
+                    <span className="font-arcade text-[9px] sm:text-[10px] uppercase font-bold text-white/40 block leading-tight truncate whitespace-nowrap">
                       ESTIMATED 1ST PRIZE
                     </span>
-                    <span className="font-arcade font-black text-lg text-[#E8FF00] leading-none drop-shadow-[0_0_8px_rgba(232,255,0,0.3)] whitespace-nowrap">
+                    <span className="font-arcade font-black text-base sm:text-lg text-[#E8FF00] leading-none drop-shadow-[0_0_8px_rgba(232,255,0,0.3)] truncate whitespace-nowrap block mt-0.5">
                       {possibleWin}
                     </span>
                   </div>
@@ -429,12 +431,12 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
                       telegramSdk.triggerHaptic('medium');
                       onJoinRoom(room.roomId);
                     }}
-                    className={`btn-neon text-xs py-2.5 px-4 rounded-xl flex items-center gap-1.5 shadow-sm uppercase whitespace-nowrap flex-shrink-0 cursor-pointer ${
+                    className={`btn-neon text-xs py-2 sm:py-2.5 px-3 sm:px-4 rounded-xl flex items-center gap-1.5 shadow-sm uppercase whitespace-nowrap shrink-0 cursor-pointer ${
                       isDrawing ? 'bg-white text-black border-white' : ''
                     }`}
                   >
                     <span>{isDrawing ? 'SPECTATE' : 'PLAY ROOM'}</span>
-                    <ArrowRight className="w-4 h-4 flex-shrink-0" />
+                    <ArrowRight className="w-4 h-4 shrink-0" />
                   </button>
                 </div>
               </div>
@@ -447,14 +449,14 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
         {/* ══════════════════════════════════════════════════ */}
         <section 
           onClick={onOpenReferral}
-          className="rounded-2xl p-3.5 flex items-center justify-between gap-3 bg-[#121212] border border-white/10 hover:border-[#E8FF00]/40 transition-all cursor-pointer shadow-sm"
+          className="rounded-2xl p-3 sm:p-3.5 flex items-center justify-between gap-2.5 sm:gap-3 bg-[#121212] border border-white/10 hover:border-[#E8FF00]/40 transition-all cursor-pointer shadow-sm min-w-0"
           aria-label="Referral Program"
         >
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 bg-[#E8FF00]/10 border border-[#E8FF00]/30 text-[#E8FF00]">
-              <Flame className="w-5 h-5 fill-current" />
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center shrink-0 bg-[#E8FF00]/10 border border-[#E8FF00]/30 text-[#E8FF00]">
+              <Flame className="w-4 h-4 sm:w-5 sm:h-5 fill-current shrink-0" />
             </div>
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <div className="font-arcade font-black text-xs text-white uppercase truncate whitespace-nowrap">
                 EARN 5% ON EVERY TICKET BUY
               </div>
@@ -464,7 +466,7 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
             </div>
           </div>
 
-          <button className="btn-dark-arcade text-xs py-1.5 px-3 rounded-xl flex-shrink-0 whitespace-nowrap cursor-pointer">
+          <button className="btn-dark-arcade text-xs py-1.5 px-3 rounded-xl shrink-0 whitespace-nowrap cursor-pointer">
             SHARE →
           </button>
         </section>
@@ -487,6 +489,7 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
         onOpenReferral={onOpenReferral}
         onOpenLeaderboard={onOpenLeaderboard}
         onOpenRules={onOpenRules}
+        hasRewardNotification={hasRewardNotification}
       />
     </div>
   );

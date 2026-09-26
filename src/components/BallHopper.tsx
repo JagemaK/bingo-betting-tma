@@ -57,25 +57,25 @@ export const BallHopper: React.FC<BallHopperProps> = ({
   return (
     <div className="w-full rounded-3xl overflow-hidden border border-white/10 bg-[#111111] shadow-[0_8px_24px_rgba(0,0,0,0.7)] relative">
       {/* Top Arcade Status Bar */}
-      <div className="relative z-10 flex items-center justify-between px-3.5 py-2 bg-[#161616] border-b border-white/10">
+      <div className="relative z-10 flex items-center justify-between px-3 sm:px-3.5 py-2 bg-[#161616] border-b border-white/10 min-w-0">
         {/* Status indicator & Progress */}
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1.5">
-            <span className={`w-2.5 h-2.5 rounded-full ${
+        <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 flex-1 mr-2">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${
               isActive ? 'bg-[#E8FF00] shadow-[0_0_8px_rgba(232,255,0,0.8)] animate-pulse' : 'bg-white/30'
             }`} />
-            <span className="font-arcade font-black text-xs uppercase tracking-wider text-white">
+            <span className="font-arcade font-black text-[11px] sm:text-xs uppercase tracking-wider text-white truncate whitespace-nowrap min-w-0">
               {isActive ? 'LIVE CALL' : status === 'lobby' ? 'WAITING' : 'ROUND FINISHED'}
             </span>
           </div>
 
-          <div className="font-arcade text-[10px] font-bold px-2 py-0.5 rounded-lg bg-black/40 border border-white/10 text-white/70">
+          <div className="font-arcade text-[9px] sm:text-[10px] font-bold px-1.5 sm:px-2 py-0.5 rounded-lg bg-black/40 border border-white/10 text-white/70 shrink-0 whitespace-nowrap">
             <span className="text-[#E8FF00]">{drawnBalls.length}</span> / 75
           </div>
         </div>
 
         {/* Audio & Master Board Controls */}
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 shrink-0">
           <button
             onClick={() => {
               onToggleSound();
@@ -212,14 +212,14 @@ export const BallHopper: React.FC<BallHopperProps> = ({
 
       {/* Popout 1-75 Master Board Modal */}
       {showMasterBoard && (
-        <div className="p-3 border-t border-white/10 bg-[#0c0c0c] space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="font-arcade text-xs font-black uppercase text-[#E8FF00] tracking-wider">
+        <div className="p-3 border-t border-white/10 bg-[#0c0c0c] space-y-2 min-w-0">
+          <div className="flex items-center justify-between min-w-0">
+            <span className="font-arcade text-xs font-black uppercase text-[#E8FF00] tracking-wider truncate whitespace-nowrap min-w-0 mr-2">
               FULL MASTER BOARD (75 NUMBERS)
             </span>
             <button
               onClick={() => setShowMasterBoard(false)}
-              className="p-1 text-white/40 hover:text-white cursor-pointer"
+              className="p-1 text-white/40 hover:text-white cursor-pointer shrink-0"
             >
               <X className="w-3.5 h-3.5" />
             </button>

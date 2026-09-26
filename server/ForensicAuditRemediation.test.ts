@@ -98,10 +98,26 @@ describe('Forensic Audit & Remediation Regression Suite', () => {
     });
 
     it('successfully processes first referral claim and enforces strict idempotency against duplicate claims', async () => {
-      const initialWallet = databaseService.getOrCreateWallet(testUserId);
-      const initialBalance = initialWallet.balance;
+      // Setup a referred user who makes an approved deposit
+      const refereeId = `usr_referee_${Date.now()}`;
+      databaseService.createUser({
+        id: refereeId,
+        telegram_id: `tg_referee_${Date.now()}`,
+        username: 'Referee Player',
+        phone: '0911778899',
+        referral_code: `REF_SUB_${Date.now()}`,
+        referred_by: testUserId,
+        role: 'USER'
+      });
 
-      // First claim: Should succeed and credit 150 ETB
+      const refereeDep = databaseService.createDepositRequest(refereeId, 'Referee Player', 100, 'Telebirr');
+      databaseService.approveDeposit('admin_usr_01', refereeDep.id);
+
+      const initialWallet = databaseService.getOrCreateWallet(testUserId);
+      const initialBonus = initialWallet.bonus_balance;
+      const initialCash = initialWallet.balance;
+
+      // First claim: Should succeed and credit 10 ETB bonus balance
       const res1 = await fetch(`${BASE_URL}/api/referral/claim`, {
         method: 'POST',
         headers: {
@@ -114,10 +130,11 @@ describe('Forensic Audit & Remediation Regression Suite', () => {
       expect(res1.status).toBe(200);
       const data1 = await res1.json();
       expect(data1.success).toBe(true);
-      expect(data1.claimedAmountETB).toBe(150);
+      expect(data1.claimedAmountETB).toBe(10);
 
       const walletAfterClaim1 = databaseService.getOrCreateWallet(testUserId);
-      expect(walletAfterClaim1.balance).toBe(Number((initialBalance + 150).toFixed(2)));
+      expect(walletAfterClaim1.bonus_balance).toBe(Number((initialBonus + 10).toFixed(2)));
+      expect(walletAfterClaim1.balance).toBe(initialCash); // Cash balance untouched!
 
       // Second claim attempt: Must be rejected with 400 and NOT credit any balance
       const res2 = await fetch(`${BASE_URL}/api/referral/claim`, {
@@ -131,10 +148,11 @@ describe('Forensic Audit & Remediation Regression Suite', () => {
 
       expect(res2.status).toBe(400);
       const data2 = await res2.json();
-      expect(data2.error).toMatch(/already been claimed/i);
+      expect(data2.error).toMatch(/no unclaimed referral rewards available/i);
 
       // Verify wallet balance remained completely unchanged after duplicate attempt
       const walletAfterClaim2 = databaseService.getOrCreateWallet(testUserId);
+      expect(walletAfterClaim2.bonus_balance).toBe(walletAfterClaim1.bonus_balance);
       expect(walletAfterClaim2.balance).toBe(walletAfterClaim1.balance);
     });
   });

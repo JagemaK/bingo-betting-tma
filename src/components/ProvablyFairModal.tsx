@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { ShieldCheck, CheckCircle, AlertTriangle, Copy, Key, Hash, ListOrdered, X, ArrowLeft, Lock, Sparkles } from 'lucide-react';
 import { GameRoomState } from '../types/bingo.js';
 import { soundService } from '../services/soundService.js';
+import { ModalHeader } from './ModalHeader.js';
 
 interface ProvablyFairModalProps {
   isOpen: boolean;
@@ -63,40 +64,13 @@ export const ProvablyFairModal: React.FC<ProvablyFairModalProps> = ({
         <div className="absolute top-0 inset-x-0 h-32 bg-gradient-to-b from-[#E8FF00]/10 via-transparent to-transparent pointer-events-none" />
 
         {/* Header */}
-        <header className="relative z-20 w-full px-5 py-3.5 bg-[#161616]/90 backdrop-blur-xl border-b border-white/10 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => {
-                soundService.playClick();
-                onClose();
-              }}
-              className="w-8 h-8 rounded-xl bg-[#202020] hover:bg-[#282828] text-white/80 hover:text-white border border-white/10 flex items-center justify-center transition-all cursor-pointer active:scale-95"
-              title="Back to Game"
-            >
-              <ArrowLeft className="w-4 h-4" />
-            </button>
-
-            <div className="flex items-center gap-2">
-              <span className="font-arcade font-black text-base text-white uppercase tracking-wider">
-                PROVABLY FAIR AUDIT
-              </span>
-              <span className="text-[9px] font-arcade font-black px-2 py-0.5 rounded-full bg-[#E8FF00] text-black uppercase">
-                GLI-11 SHA-256
-              </span>
-            </div>
-          </div>
-
-          <button
-            onClick={() => {
-              soundService.playClick();
-              onClose();
-            }}
-            className="w-8 h-8 rounded-full bg-[#202020] hover:bg-[#282828] text-white/60 hover:text-white border border-white/10 transition-all flex items-center justify-center cursor-pointer active:scale-95"
-            title="Close Audit"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </header>
+        <ModalHeader
+          title="PROVABLY FAIR AUDIT"
+          badge="GLI-11 SHA-256"
+          badgeVariant="yellow"
+          onClose={onClose}
+          closeTitle="Close Audit"
+        />
 
         {/* Main Content */}
         <main className="relative z-10 flex-1 overflow-y-auto custom-scrollbar p-5 space-y-4 w-full">

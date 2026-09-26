@@ -248,16 +248,60 @@ export class GameRoom {
               const wallet = dbInstance.getOrCreateWallet(ticket.user_id);
               const refundAmount = game.bet_per_card;
 
-              dbInstance.recordLedgerTransaction({
-                userId: ticket.user_id,
-                username: ticket.username,
-                type: 'REFUND',
-                amount: refundAmount,
-                gameId: game.id,
-                ticketId: ticket.id,
-                referenceId: refundRef,
-                description: `Automatic refund for crashed/interrupted game ${game.id} (Card #${ticket.card_number})`
-              });
+              // Check if purchase was made partially or fully with bonus balance
+              const betTx = (dbInstance as any).db.prepare(
+                "SELECT description FROM ledger_transactions WHERE user_id = ? AND game_id = ? AND type = 'BET' AND description LIKE ?"
+              ).get(ticket.user_id, game.id, `%#${ticket.card_number}%`) as { description: string } | undefined;
+
+              let bonusPaid = 0;
+              let cashPaid = refundAmount;
+
+              if (betTx && betTx.description && betTx.description.includes('[Paid: ')) {
+                const match = betTx.description.match(/\[Paid:\s*([0-9.]+)\s*Bonus\s*\+\s*([0-9.]+)\s*Cash\]/i);
+                if (match) {
+                  bonusPaid = parseFloat(match[1]) || 0;
+                  cashPaid = parseFloat(match[2]) || 0;
+                }
+              }
+
+              if (bonusPaid > 0) {
+                // Properly split refund into bonus and cash
+                dbInstance.rewardService.refundPurchase(ticket.user_id, bonusPaid, cashPaid, []);
+
+                let desc = `Automatic refund for crashed/interrupted game ${game.id} (Card #${ticket.card_number})`;
+                desc += ` [Refunded: ${bonusPaid.toFixed(2)} Bonus + ${cashPaid.toFixed(2)} Cash]`;
+
+                const entryId = `tx_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+                (dbInstance as any).db.prepare(`
+                  INSERT INTO ledger_transactions (
+                    id, user_id, username, type, amount, balance_before, balance_after,
+                    game_id, ticket_id, reference_id, description, created_at
+                  ) VALUES (?, ?, ?, 'REFUND', ?, ?, ?, ?, ?, ?, ?, ?)
+                `).run(
+                  entryId,
+                  ticket.user_id,
+                  ticket.username,
+                  refundAmount,
+                  wallet.balance,
+                  wallet.balance + cashPaid,
+                  game.id,
+                  ticket.id,
+                  refundRef,
+                  desc,
+                  new Date().toISOString()
+                );
+              } else {
+                dbInstance.recordLedgerTransaction({
+                  userId: ticket.user_id,
+                  username: ticket.username,
+                  type: 'REFUND',
+                  amount: refundAmount,
+                  gameId: game.id,
+                  ticketId: ticket.id,
+                  referenceId: refundRef,
+                  description: `Automatic refund for crashed/interrupted game ${game.id} (Card #${ticket.card_number})`
+                });
+              }
               refundedTicketsCount++;
             });
           } catch (err: any) {
@@ -434,15 +478,33 @@ export class GameRoom {
 
     this.status = 'active';
     this.currentBallIndex = 0;
+
+    const pool = calculatePariMutuelPool({
+      betPerCard: this.config.betPerCard,
+      totalCardsSold: this.tickets.size,
+      houseRakePercent: this.config.rakePercent
+    });
+
+    try {
+      const dbInstance = this.db || databaseService;
+      dbInstance.updateGame(this.gameId, {
+        status: 'active',
+        total_cards_sold: this.tickets.size,
+        prize_pool: pool.totalPot
+      });
+    } catch (e: any) {
+      console.warn(`[GameRoom] Error updating game ${this.gameId} to active in DB:`, e.message);
+    }
+
     this.broadcastState();
 
     this.io.to(`room_${this.config.roomId}`).emit('GAME_STARTED', {
       roomId: this.config.roomId,
       gameId: this.gameId,
       totalCards: this.tickets.size,
-      totalPot: this.getPublicState().totalPot,
-      winnerPayoutAmount: this.getPublicState().winnerPayoutAmount,
-      isFivePlayerBonus: this.getPublicState().isFivePlayerBonus
+      totalPot: pool.totalPot,
+      winnerPayoutAmount: pool.winnerPayoutAmount,
+      isFivePlayerBonus: pool.isFivePlayerBonus
     });
 
     this.startDrawingLoop();
@@ -458,6 +520,13 @@ export class GameRoom {
 
         const ballLetter = getBallLetter(ballNum);
         const drawnSoFar = this.shuffledBalls.slice(0, this.currentBallIndex);
+
+        try {
+          const dbInstance = this.db || databaseService;
+          dbInstance.recordDrawnBall(this.gameId, this.currentBallIndex, ballNum, ballLetter);
+        } catch (e: any) {
+          // Non-blocking for live draw
+        }
 
         this.io.to(`room_${this.config.roomId}`).emit('BALL_DRAWN', {
           roomId: this.config.roomId,
@@ -485,121 +554,127 @@ export class GameRoom {
     cardNumber: number,
     isBot: boolean = false
   ): Promise<PurchasedTicket> {
-    // If the room finished or is active without human tickets, start a fresh lobby
-    if (this.status !== 'lobby') {
-      if (this.status === 'finished') {
-        this.initNewGame();
-      } else {
-        throw new Error('Active ball draw is in progress. Round will reset in a moment!');
-      }
-    }
-
-    if (this.cardToTicketMap.has(cardNumber)) {
-      const existing = this.cardToTicketMap.get(cardNumber);
-      if (existing && existing.playerId === playerId) {
-        return existing; // Already owned by this player
-      }
-      throw new Error(`Card #${cardNumber} is already taken by another player`);
-    }
-
-    const grid = this.cardCatalog.get(cardNumber) || generate75BallCard();
-
-    let bonusPaid = 0;
-    let cashPaid = this.config.betPerCard;
-    let bonusConsumedRecords: Array<{ rewardId: string; amount: number }> = [];
-
-    const fingerprintHash = computeTicketFingerprint(grid, playerId, this.gameId, this.serverSecret);
-    const ticketId = `tkt_c${cardNumber}_${Date.now().toString().slice(-5)}`;
-
-    if (!isBot) {
-      databaseService.transaction(() => {
-        const split = databaseService.rewardService.consumeBonusForPurchase(
-          playerId,
-          this.config.betPerCard,
-          'BINGO_CARD',
-          this.gameId
-        );
-        bonusPaid = split.bonusPaid;
-        cashPaid = split.cashPaid;
-        bonusConsumedRecords = split.bonusConsumedRecords;
-
-        const wallet = databaseService.getWallet(playerId)!;
-        const entryId = `tx_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
-        let desc = `Bingo Card #${cardNumber} for ${this.config.roomName} (${this.gameId})`;
-        if (bonusPaid > 0) {
-          desc += ` [Paid: ${bonusPaid.toFixed(2)} Bonus + ${cashPaid.toFixed(2)} Cash]`;
+    return await this.withLock(`card_${this.gameId}_${cardNumber}`, async () => {
+      // If the room finished or is active without human tickets, start a fresh lobby
+      if (this.status !== 'lobby') {
+        if (this.status === 'finished') {
+          this.initNewGame();
+        } else {
+          throw new Error('Active ball draw is in progress. Round will reset in a moment!');
         }
-
-        (databaseService as any).db.prepare(`
-          INSERT INTO ledger_transactions (
-            id, user_id, username, type, amount, balance_before, balance_after,
-            game_id, description, created_at
-          ) VALUES (?, ?, ?, 'BET', ?, ?, ?, ?, ?, ?)
-        `).run(
-          entryId,
-          playerId,
-          username,
-          this.config.betPerCard,
-          wallet.balance + cashPaid,
-          wallet.balance,
-          this.gameId,
-          desc,
-          new Date().toISOString()
-        );
-
-        databaseService.createPlayerTicket({
-          id: ticketId,
-          gameId: this.gameId,
-          cardNumber,
-          userId: playerId,
-          username,
-          gridJson: JSON.stringify(grid),
-          fingerprintHash,
-          isBot
-        });
-      });
-    } else {
-      try {
-        databaseService.createPlayerTicket({
-          id: ticketId,
-          gameId: this.gameId,
-          cardNumber,
-          userId: playerId,
-          username,
-          gridJson: JSON.stringify(grid),
-          fingerprintHash,
-          isBot
-        });
-      } catch (e) {
-        // Ignore in mock/unit contexts
       }
-    }
 
-    const ticket: PurchasedTicket = {
-      ticketId,
-      cardNumber,
-      playerId,
-      username,
-      grid,
-      fingerprintHash,
-      purchasedAt: new Date().toISOString(),
-      isBot,
-      bonusPaid,
-      cashPaid,
-      bonusConsumedRecords
-    };
+      if (this.cardToTicketMap.has(cardNumber)) {
+        const existing = this.cardToTicketMap.get(cardNumber);
+        if (existing && existing.playerId === playerId) {
+          return existing; // Already owned by this player
+        }
+        throw new Error(`Card #${cardNumber} is already taken by another player`);
+      }
 
-    this.tickets.set(ticketId, ticket);
-    this.cardToTicketMap.set(cardNumber, ticket);
+      const grid = this.cardCatalog.get(cardNumber) || generate75BallCard();
 
-    // Rule: The game countdown starts after it reaches 5 cards selected, giving 20 seconds waiting time
-    if (this.tickets.size >= 5 && !this.isCountdownActive) {
-      this.startLobbyCountdown();
-    } else {
-      this.broadcastState();
-    }
+      let bonusPaid = 0;
+      let cashPaid = this.config.betPerCard;
+      let bonusConsumedRecords: Array<{ rewardId: string; amount: number }> = [];
 
-    return ticket;
+      const fingerprintHash = computeTicketFingerprint(grid, playerId, this.gameId, this.serverSecret);
+      const ticketId = `tkt_c${cardNumber}_${Date.now().toString().slice(-5)}`;
+
+      const dbInstance = this.db || databaseService;
+      if (!isBot) {
+        dbInstance.transaction(() => {
+          const split = dbInstance.rewardService.consumeBonusForPurchase(
+            playerId,
+            this.config.betPerCard,
+            'BINGO_CARD',
+            this.gameId
+          );
+          bonusPaid = split.bonusPaid;
+          cashPaid = split.cashPaid;
+          bonusConsumedRecords = split.bonusConsumedRecords;
+
+          const wallet = dbInstance.getWallet(playerId)!;
+          const entryId = `tx_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+          let desc = `Bingo Card #${cardNumber} for ${this.config.roomName} (${this.gameId})`;
+          if (bonusPaid > 0) {
+            desc += ` [Paid: ${bonusPaid.toFixed(2)} Bonus + ${cashPaid.toFixed(2)} Cash]`;
+          }
+
+          (dbInstance as any).db.prepare(`
+            INSERT INTO ledger_transactions (
+              id, user_id, username, type, amount, balance_before, balance_after,
+              game_id, description, created_at
+            ) VALUES (?, ?, ?, 'BET', ?, ?, ?, ?, ?, ?)
+          `).run(
+            entryId,
+            playerId,
+            username,
+            this.config.betPerCard,
+            wallet.balance + cashPaid,
+            wallet.balance,
+            this.gameId,
+            desc,
+            new Date().toISOString()
+          );
+
+          dbInstance.createPlayerTicket({
+            id: ticketId,
+            gameId: this.gameId,
+            cardNumber,
+            userId: playerId,
+            username,
+            gridJson: JSON.stringify(grid),
+            fingerprintHash,
+            isBot
+          });
+
+          // Authoritative Room Play Reward: Record qualifying human card purchase
+          dbInstance.rewardService.recordCardPurchase(playerId, this.config.roomId, 1);
+        });
+      } else {
+        try {
+          dbInstance.createPlayerTicket({
+            id: ticketId,
+            gameId: this.gameId,
+            cardNumber,
+            userId: playerId,
+            username,
+            gridJson: JSON.stringify(grid),
+            fingerprintHash,
+            isBot
+          });
+        } catch (e) {
+          // Ignore in mock/unit contexts
+        }
+      }
+
+      const ticket: PurchasedTicket = {
+        ticketId,
+        cardNumber,
+        playerId,
+        username,
+        grid,
+        fingerprintHash,
+        purchasedAt: new Date().toISOString(),
+        isBot,
+        bonusPaid,
+        cashPaid,
+        bonusConsumedRecords
+      };
+
+      this.tickets.set(ticketId, ticket);
+      this.cardToTicketMap.set(cardNumber, ticket);
+
+      // Rule: The game countdown starts after it reaches 5 cards selected, giving 20 seconds waiting time
+      if (this.tickets.size >= 5 && !this.isCountdownActive) {
+        this.startLobbyCountdown();
+      } else {
+        this.broadcastState();
+      }
+
+      return ticket;
+    });
   }
 
   /**
@@ -638,66 +713,72 @@ export class GameRoom {
     playerId: string,
     cardNumber: number
   ): Promise<boolean> {
-    if (this.status !== 'lobby') {
-      throw new Error('Cards can only be deselected during the Lobby phase');
-    }
-
-    const ticket = this.cardToTicketMap.get(cardNumber);
-    if (!ticket || ticket.playerId !== playerId) {
-      throw new Error('Card not found or not owned by you');
-    }
-
-    this.tickets.delete(ticket.ticketId);
-    this.cardToTicketMap.delete(cardNumber);
-
-    // If cards drop below 5, stop countdown
-    if (this.tickets.size < 5 && this.isCountdownActive) {
-      if (this.lobbyTimer) clearInterval(this.lobbyTimer);
-      this.lobbyTimer = null;
-      this.isCountdownActive = false;
-      this.lobbyTimeRemaining = 20;
-    }
-
-    databaseService.transaction(() => {
-      // Remove ticket from persistent database to prevent unique constraint collisions and ghost records
-      databaseService.deletePlayerTicket(this.gameId, cardNumber);
-
-      if (!ticket.isBot) {
-        databaseService.rewardService.refundPurchase(
-          playerId,
-          ticket.bonusPaid || 0,
-          ticket.cashPaid || 0,
-          ticket.bonusConsumedRecords
-        );
-
-        let desc = `Refund for Bingo Card #${cardNumber} (${this.gameId})`;
-        if ((ticket.bonusPaid || 0) > 0) {
-          desc += ` [Refunded: ${(ticket.bonusPaid || 0).toFixed(2)} Bonus + ${(ticket.cashPaid || 0).toFixed(2)} Cash]`;
-        }
-
-        const wallet = databaseService.getWallet(playerId)!;
-        const entryId = `tx_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
-        (databaseService as any).db.prepare(`
-          INSERT INTO ledger_transactions (
-            id, user_id, username, type, amount, balance_before, balance_after,
-            game_id, description, created_at
-          ) VALUES (?, ?, ?, 'REFUND', ?, ?, ?, ?, ?, ?)
-        `).run(
-          entryId,
-          playerId,
-          ticket.username,
-          this.config.betPerCard,
-          wallet.balance - (ticket.cashPaid || 0),
-          wallet.balance,
-          this.gameId,
-          desc,
-          new Date().toISOString()
-        );
+    return await this.withLock(`card_${this.gameId}_${cardNumber}`, async () => {
+      if (this.status !== 'lobby') {
+        throw new Error('Cards can only be deselected during the Lobby phase');
       }
-    });
 
-    this.broadcastState();
-    return true;
+      const ticket = this.cardToTicketMap.get(cardNumber);
+      if (!ticket || ticket.playerId !== playerId) {
+        throw new Error('Card not found or not owned by you');
+      }
+
+      this.tickets.delete(ticket.ticketId);
+      this.cardToTicketMap.delete(cardNumber);
+
+      // If cards drop below 5, stop countdown
+      if (this.tickets.size < 5 && this.isCountdownActive) {
+        if (this.lobbyTimer) clearInterval(this.lobbyTimer);
+        this.lobbyTimer = null;
+        this.isCountdownActive = false;
+        this.lobbyTimeRemaining = 20;
+      }
+
+      const dbInstance = this.db || databaseService;
+      dbInstance.transaction(() => {
+        // Remove ticket from persistent database to prevent unique constraint collisions and ghost records
+        dbInstance.deletePlayerTicket(this.gameId, cardNumber);
+
+        if (!ticket.isBot) {
+          dbInstance.rewardService.refundPurchase(
+            playerId,
+            ticket.bonusPaid || 0,
+            ticket.cashPaid || 0,
+            ticket.bonusConsumedRecords
+          );
+
+          // Authoritative Room Play Reward: Reverse counter on lobby card deselection
+          dbInstance.rewardService.recordCardRefund(playerId, this.config.roomId, 1);
+
+          let desc = `Refund for Bingo Card #${cardNumber} (${this.gameId})`;
+          if ((ticket.bonusPaid || 0) > 0) {
+            desc += ` [Refunded: ${(ticket.bonusPaid || 0).toFixed(2)} Bonus + ${(ticket.cashPaid || 0).toFixed(2)} Cash]`;
+          }
+
+          const wallet = dbInstance.getWallet(playerId)!;
+          const entryId = `tx_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+          (dbInstance as any).db.prepare(`
+            INSERT INTO ledger_transactions (
+              id, user_id, username, type, amount, balance_before, balance_after,
+              game_id, description, created_at
+            ) VALUES (?, ?, ?, 'REFUND', ?, ?, ?, ?, ?, ?)
+          `).run(
+            entryId,
+            playerId,
+            ticket.username,
+            this.config.betPerCard,
+            wallet.balance - (ticket.cashPaid || 0),
+            wallet.balance,
+            this.gameId,
+            desc,
+            new Date().toISOString()
+          );
+        }
+      });
+
+      this.broadcastState();
+      return true;
+    });
   }
 
   /**
@@ -720,7 +801,7 @@ export class GameRoom {
       throw new Error('All cards in this room are already taken');
     }
 
-    const randomIndex = Math.floor(Math.random() * availableNumbers.length);
+    const randomIndex = crypto.randomInt(0, availableNumbers.length);
     const chosenNumber = availableNumbers[randomIndex];
     return this.selectCardNumber(playerId, username, chosenNumber, isBot);
   }
@@ -741,8 +822,10 @@ export class GameRoom {
         return { success: false, message: 'Game has already concluded or is not in active drawing phase' };
       }
 
+      const dbInstance = this.db || databaseService;
+
       // Check persistent database for existing claim on this game and ticket
-      const existingClaim = databaseService.getBingoClaim(this.gameId, ticketId);
+      const existingClaim = dbInstance.getBingoClaim(this.gameId, ticketId);
       if (existingClaim) {
         return { success: false, message: 'Ticket has already been claimed for this game' };
       }
@@ -809,7 +892,7 @@ export class GameRoom {
       this.winners.push(winnerRecord);
 
       // Record idempotent claim in persistent database
-      databaseService.recordBingoClaim({
+      dbInstance.recordBingoClaim({
         gameId: this.gameId,
         ticketId,
         userId: playerId,
@@ -818,15 +901,31 @@ export class GameRoom {
       });
 
       if (!ticket.isBot) {
-        await ledgerService.recordTransaction(
-          playerId,
-          'win_payout',
-          payoutAmount,
-          `Bingo Winner (${patternType} - ${pool.winnerPayoutPercent}% Payout) on Card #${ticket.cardNumber} in ${this.config.roomName}`,
-          this.gameId,
-          ticketId,
-          `claim_${this.gameId}_${ticketId}`
-        );
+        if (this.db && this.db !== databaseService) {
+          const user = dbInstance.getUserById(playerId);
+          if (user) {
+            dbInstance.recordLedgerTransaction({
+              userId: playerId,
+              username: user.username,
+              type: 'WIN_PAYOUT',
+              amount: payoutAmount,
+              description: `Bingo Winner (${patternType} - ${pool.winnerPayoutPercent}% Payout) on Card #${ticket.cardNumber} in ${this.config.roomName}`,
+              gameId: this.gameId,
+              ticketId,
+              referenceId: `claim_${this.gameId}_${ticketId}`
+            });
+          }
+        } else {
+          await ledgerService.recordTransaction(
+            playerId,
+            'win_payout',
+            payoutAmount,
+            `Bingo Winner (${patternType} - ${pool.winnerPayoutPercent}% Payout) on Card #${ticket.cardNumber} in ${this.config.roomName}`,
+            this.gameId,
+            ticketId,
+            `claim_${this.gameId}_${ticketId}`
+          );
+        }
       }
 
       this.io.to(`room_${this.config.roomId}`).emit('BINGO_WINNER_ANNOUNCED', {
@@ -849,6 +948,16 @@ export class GameRoom {
   private transitionToFinished() {
     this.clearTimers();
     this.status = 'finished';
+
+    try {
+      const dbInstance = this.db || databaseService;
+      dbInstance.updateGame(this.gameId, {
+        status: 'finished',
+        finished_at: new Date().toISOString()
+      });
+    } catch (e: any) {
+      console.warn(`[GameRoom] Error updating game ${this.gameId} to finished in DB:`, e.message);
+    }
 
     this.broadcastState();
 
@@ -933,8 +1042,14 @@ export class MultiRoomManager {
     ];
 
     for (const cfg of roomConfigs) {
-      const room = new GameRoom(this.io, cfg);
+      const room = new GameRoom(this.io, cfg, databaseService);
       this.rooms.set(cfg.roomId, room);
+      databaseService.rewardService.registerRoomConfig({
+        roomId: cfg.roomId,
+        roomName: cfg.roomName,
+        cardPrice: cfg.betPerCard,
+        badge: cfg.badge
+      });
     }
   }
 

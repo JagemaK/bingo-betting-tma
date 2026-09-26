@@ -90,6 +90,8 @@ export interface GameRoomState {
   winners: WinnerRecord[];
 }
 
+export type UserRole = 'USER' | 'AGENT' | 'SUPER_ADMIN' | 'ADMIN';
+
 export interface UserAccount {
   id?: string;
   playerId: string;
@@ -101,10 +103,12 @@ export interface UserAccount {
   avatarUrl?: string;
   isBot?: boolean;
   phone?: string;
+  telebirr_number?: string;
+  assigned_agent_name?: string;
   isVerified?: boolean;
   registration_status?: string;
-  role?: 'USER' | 'ADMIN';
-  account_status?: 'ACTIVE' | 'SUSPENDED' | 'BANNED';
+  role?: UserRole;
+  account_status?: 'ACTIVE' | 'SUSPENDED' | 'BANNED' | 'DEACTIVATED' | 'DELETION_REQUESTED' | 'DELETED';
   token?: string;
   totalGamesPlayed?: number;
   totalWonETB?: number;
@@ -153,7 +157,7 @@ export interface LedgerEntry {
   id: string;
   playerId: string;
   username: string;
-  type: 'deposit' | 'buy_in' | 'win_payout' | 'withdrawal' | 'refund' | 'bonus' | 'loss' | 'adjustment';
+  type: 'deposit' | 'buy_in' | 'win_payout' | 'withdrawal' | 'refund' | 'bonus' | 'loss' | 'adjustment' | 'escrow_hold';
   amount: number;
   balanceBefore: number;
   balanceAfter: number;
@@ -166,20 +170,49 @@ export interface LedgerEntry {
 
 export interface LeaderboardWinner {
   rank: number;
-  username: string;
-  totalWonUSD: number;
+  userId?: string;
+  username?: string;
+  name?: string;
+  avatar?: string;
+  totalWon?: number;
+  totalWonUSD?: number;
   totalWonETB: number;
+  wins?: number;
   gamesPlayed: number;
-  badge: string;
+  level?: number;
+  xp?: number;
+  badge?: string;
 }
 
 export interface RecentJackpot {
+  id?: string;
+  userId?: string;
   username: string;
-  amountUSD: number;
+  avatar?: string;
+  amountUSD?: number;
   amountETB: number;
   pattern: string;
-  timeAgo: string;
+  time?: string;
+  timeAgo?: string;
   room: string;
+  winType?: 'BINGO' | 'DAILY_JACKPOT';
+}
+
+export interface CurrentUserRankStats {
+  rank: number | null;
+  totalWonETB: number;
+  totalWins: number;
+  gamesPlayed: number;
+  level: number;
+  xp: number;
+  isRanked: boolean;
+}
+
+export interface LeaderboardApiResponse {
+  success?: boolean;
+  topWinners: LeaderboardWinner[];
+  recentJackpots: RecentJackpot[];
+  currentUserRank?: CurrentUserRankStats;
 }
 
 export interface ReferralStats {
@@ -194,6 +227,58 @@ export interface ReferralStats {
   commissionRate: string;
 }
 
+export interface FirstDepositRewardStatus {
+  status: 'NOT_ELIGIBLE' | 'CLAIMABLE' | 'CLAIMED';
+  qualifyingDepositAmount: number;
+  rewardAmount: number;
+  claimedAt?: string | null;
+  depositId?: string;
+}
+
+export interface RoomPlayRewardStatus {
+  roomId: string;
+  roomName: string;
+  cardPrice: number;
+  cardsPurchased: number;
+  milestonesClaimed: number;
+  completedBlocks: number;
+  availableBlocks: number;
+  availableRewardAmount: number;
+  progress: number;
+  target: number;
+  status: 'PROGRESS' | 'REWARD_AVAILABLE' | 'CLAIMED';
+  badge?: string;
+}
+
+export interface ReferralRewardStatus {
+  referralCode: string;
+  referralLink: string;
+  totalInvited: number;
+  qualifiedCount: number;
+  claimedCount: number;
+  unclaimedCount: number;
+  availableRewardAmount: number;
+  rewardPerReferral: number;
+}
+
+export interface RewardHistoryItem {
+  id: string;
+  rewardType: 'FIRST_DEPOSIT' | 'ROOM_PLAY' | 'REFERRAL';
+  amount: number;
+  claimedAt: string;
+  status: 'CLAIMED';
+  description: string;
+}
+
+export interface UserRewardsSummary {
+  bonusBalance: number;
+  cashBalance: number;
+  firstDeposit: FirstDepositRewardStatus;
+  roomRewards: RoomPlayRewardStatus[];
+  referralRewards: ReferralRewardStatus;
+  history: RewardHistoryItem[];
+}
+
 export interface DepositRequest {
   id: string;
   playerId: string;
@@ -206,6 +291,10 @@ export interface DepositRequest {
   processedAt?: string;
   processedBy?: string;
   rejectionReason?: string;
+  paymentAccountId?: string;
+  paymentPhone?: string;
+  assignedAgentId?: string;
+  customerPhone?: string;
 }
 
 export interface WithdrawalRequest {
@@ -214,12 +303,169 @@ export interface WithdrawalRequest {
   username: string;
   amount: number;
   address: string;
-  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
   referenceId?: string;
   createdAt: string;
   processedAt?: string;
   processedBy?: string;
   rejectionReason?: string;
+  assignedAgentId?: string;
+  customerPhone?: string;
+}
+
+export interface PaymentAccount {
+  id: string;
+  provider: string;
+  account_name: string;
+  phone_number: string;
+  assigned_agent_id?: string | null;
+  assigned_agent_name?: string | null;
+  active: boolean | number;
+  instructions?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface PaymentAccountLog {
+  id: string;
+  account_id: string;
+  action: string;
+  old_number?: string | null;
+  new_number?: string | null;
+  changed_by: string;
+  note?: string | null;
+  created_at: string;
+}
+
+export interface AgentPerformance {
+  agent_id: string;
+  username: string;
+  phone: string;
+  telebirr_number: string;
+  assigned_agent_name: string;
+  account_status: string;
+  created_at: string;
+  last_login_at: string;
+  deposits_processed: number;
+  deposit_amount: number;
+  withdrawals_processed: number;
+  withdrawal_amount: number;
+  deposits_approved: number;
+  deposits_rejected: number;
+  withdrawals_approved: number;
+  withdrawals_rejected: number;
+  pending_workload: number;
+  last_activity_at: string;
+}
+
+export interface AgentActivityLog {
+  id: string;
+  actor_id: string;
+  actor_role: string;
+  action: string;
+  target_id?: string | null;
+  target_user_id?: string | null;
+  metadata?: any;
+  ip_address?: string | null;
+  created_at: string;
+}
+
+export interface WeekendJackpotPlayer {
+  user_id: string;
+  username: string;
+  phone: string | null;
+  cards_count: number;
+  total_spent: number;
+  first_purchase_at: string;
+  last_purchase_at: string;
+  card_numbers: number[];
+  payment_source: string;
+  round_id: string;
+  is_winner: boolean;
+}
+
+export interface WeekendJackpotRoundSummary {
+  round_id: string;
+  date: string;
+  cutoff_at: string;
+  start_time: string;
+  cards_sold: number;
+  unique_players: number;
+  prize_pool: number;
+  winner_username: string | null;
+  winner_card_number: number | null;
+  winning_ticket_id: string | null;
+  status: string;
+  completed_at: string | null;
+}
+
+export interface WeekendJackpotConfig {
+  id: string;
+  day_of_week: string;
+  start_time: string;
+  timezone: string;
+  min_cards: number;
+  max_cards: number;
+  card_price: number;
+  updated_at: string;
+}
+
+export interface SuperAdminOverviewStats {
+  pending_deposits: number;
+  today_approved_deposits: number;
+  today_rejected_deposits: number;
+  pending_withdrawals: number;
+  today_completed_withdrawals: number;
+  today_deposited_amount: number;
+  today_withdrawn_amount: number;
+  total_users: number;
+  new_users_today: number;
+  active_users: number;
+  jackpot_participating_users: number;
+  jackpot_cards_sold_all_time: number;
+  active_agents: number;
+  suspended_agents: number;
+  agents_processing_count: number;
+  current_jackpot_status: string;
+  current_jackpot_cards_sold: number;
+  current_jackpot_players: number;
+  current_jackpot_prize_pool: number;
+  current_jackpot_start_time: string;
+  current_jackpot_is_eligible: boolean;
+}
+
+export interface ReconciliationReport {
+  summary: {
+    total_transactions: number;
+    total_amount: number;
+    approved_count: number;
+    approved_amount: number;
+    rejected_count: number;
+    rejected_amount: number;
+    pending_count: number;
+    pending_amount: number;
+    discrepancy_count: number;
+  };
+  transactions: Array<{
+    id: string;
+    type: 'DEPOSIT' | 'WITHDRAWAL';
+    user_id: string;
+    username: string;
+    customer_phone: string | null;
+    amount: number;
+    payment_method: string;
+    payment_phone?: string | null;
+    payment_account_id?: string | null;
+    reference_id: string | null;
+    status: string;
+    assigned_agent_id: string | null;
+    processed_by: string | null;
+    created_at: string;
+    processed_at: string | null;
+    rejection_reason: string | null;
+    has_discrepancy: boolean;
+    discrepancy_note: string | null;
+  }>;
 }
 
 export interface AuditLogRecord {
@@ -242,8 +488,21 @@ export interface AdminUserDetail {
   username: string;
   phone?: string;
   walletBalance: number;
-  role: 'USER' | 'ADMIN';
-  account_status: 'ACTIVE' | 'SUSPENDED' | 'BANNED';
+  reservedBalance?: number;
+  bonusBalance?: number;
+  totalPlayableBalance?: number;
+  balance?: number;
+  total_deposited?: number;
+  total_withdrawn?: number;
+  deposit_count?: number;
+  withdrawal_count?: number;
+  bingo_tickets_count?: number;
+  jackpot_tickets_count?: number;
+  wins_count?: number;
+  role: UserRole;
+  account_type?: 'REAL' | 'GUEST' | 'BOT' | 'TEST' | 'ADMIN' | 'AGENT';
+  is_bot?: boolean;
+  account_status: 'ACTIVE' | 'SUSPENDED' | 'BANNED' | 'DEACTIVATED' | 'DELETION_REQUESTED' | 'DELETED';
   registration_status: string;
   created_at: string;
   last_login_at: string;

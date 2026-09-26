@@ -146,7 +146,7 @@ export const DailyJackpotEntryView: React.FC<DailyJackpotEntryViewProps> = ({
       }
     } catch (err: any) {
       console.error('[DailyJackpotEntryView] Load error:', err);
-      if (!silent) setErrorMsg('Failed to load Daily Grand Jackpot data');
+      if (!silent) setErrorMsg('Failed to load Weekend Jackpot data');
     } finally {
       if (!silent) setLoading(false);
     }
@@ -262,7 +262,7 @@ export const DailyJackpotEntryView: React.FC<DailyJackpotEntryViewProps> = ({
   const hasEnoughBalance = userBalance >= totalInvestment;
   const cardsSold = jackpotData?.cardsSold ?? 0;
   const progressPercent = Math.min(100, Math.round((cardsSold / MAX_CARDS) * 100));
-  const isPostponed = Boolean(jackpotData?.isPostponed || jackpotData?.status === 'POSTPONED');
+  const isPostponed = Boolean(jackpotData?.isPostponed || (jackpotData?.status === 'POSTPONED' && cardsSold < 100));
   const jackpotDisplayAmount = (jackpotData?.jackpotAmount && jackpotData.jackpotAmount > 150000)
     ? jackpotData.jackpotAmount
     : 150000;
@@ -325,7 +325,7 @@ export const DailyJackpotEntryView: React.FC<DailyJackpotEntryViewProps> = ({
       soundService.playJackpotFanfare();
       telegramSdk.triggerHaptic('heavy');
       setPurchaseSuccess(true);
-      setSuccessMsg(`🎉 Successfully purchased ${selectedNumbers.length} card(s) for the Daily Grand Jackpot!`);
+      setSuccessMsg(`🎉 Successfully purchased ${selectedNumbers.length} card(s) for the Weekend Jackpot!`);
 
       // Update local and parent user balance
       if (result.user && onUpdateUser) {
@@ -360,10 +360,10 @@ export const DailyJackpotEntryView: React.FC<DailyJackpotEntryViewProps> = ({
       {/* ══════════════════════════════════════════════════════════════════════ */}
       {/* 1. TOP STICKY HEADER (Compact, Safe-Area Supported, Non-Obtrusive)    */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
-      <header className="sticky top-0 z-40 bg-[#0c0c0c]/95 backdrop-blur-xl border-b border-white/[0.08] shadow-[0_4px_25px_rgba(0,0,0,0.7)] pt-[max(0.375rem,env(safe-area-inset-top))] px-3 sm:px-4 py-2.5">
-        <div className="max-w-4xl mx-auto flex items-center justify-between gap-2">
+      <header className="sticky top-0 z-40 bg-[#0c0c0c]/95 backdrop-blur-xl border-b border-white/[0.08] shadow-[0_4px_25px_rgba(0,0,0,0.7)] pt-[max(0.375rem,env(safe-area-inset-top))] px-2.5 sm:px-4 py-2 sm:py-2.5 min-w-0">
+        <div className="max-w-4xl mx-auto flex items-center justify-between gap-1.5 sm:gap-2 min-w-0">
           {/* Back Button + Title */}
-          <div className="flex items-center gap-2 min-w-0">
+          <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 flex-1 mr-1 sm:mr-2">
             <button
               onClick={() => {
                 soundService.playClick();
@@ -374,18 +374,18 @@ export const DailyJackpotEntryView: React.FC<DailyJackpotEntryViewProps> = ({
               title="Return to Lobby"
               aria-label="Back to Lobby"
             >
-              <ChevronLeft className="w-5 h-5 text-[#E8FF00]" />
-              <span className="font-arcade text-xs font-black uppercase text-white/80 pr-1 hidden xs:inline">
+              <ChevronLeft className="w-4 h-4 sm:w-5 sm:h-5 text-[#E8FF00] shrink-0" />
+              <span className="font-arcade text-xs font-black uppercase text-white/80 pr-1 hidden xs:inline whitespace-nowrap">
                 BACK
               </span>
             </button>
 
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <h1 className="font-arcade font-black text-xs sm:text-sm text-white tracking-tight uppercase truncate">
-                  DAILY GRAND JACKPOT
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
+                <h1 className="font-arcade font-black text-xs sm:text-sm text-white tracking-tight uppercase truncate whitespace-nowrap min-w-0">
+                  WEEKEND JACKPOT
                 </h1>
-                <span className={`px-2 py-0.5 rounded-full text-[9px] font-arcade font-bold uppercase tracking-wider shrink-0 ${
+                <span className={`px-1.5 sm:px-2 py-0.5 rounded-full text-[8px] sm:text-[9px] font-arcade font-bold uppercase tracking-wider shrink-0 whitespace-nowrap ${
                   isPostponed
                     ? 'bg-amber-500/20 text-amber-300 border border-amber-400/40'
                     : 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/40 animate-pulse'
@@ -393,16 +393,16 @@ export const DailyJackpotEntryView: React.FC<DailyJackpotEntryViewProps> = ({
                   {isPostponed ? 'POSTPONED' : 'OPEN'}
                 </span>
               </div>
-              <div className="text-[10px] text-white/50 font-arcade flex items-center gap-1.5 truncate">
+              <div className="text-[9px] sm:text-[10px] text-white/50 font-arcade flex items-center gap-1.5 truncate whitespace-nowrap mt-0.5">
                 <Clock className="w-3 h-3 text-amber-400 shrink-0" />
-                <span>Cutoff: 12:00 PM Addis Ababa</span>
-                <span className="text-amber-300 font-bold">• {timeRemainingStr || 'Countdown'}</span>
+                <span className="truncate">Cutoff: Sunday 10:00 AM Addis Ababa</span>
+                <span className="text-amber-300 font-bold shrink-0">• {timeRemainingStr || 'Countdown'}</span>
               </div>
             </div>
           </div>
 
           {/* Right Header Controls: Wallet & Refresh */}
-          <div className="flex items-center gap-1.5 shrink-0">
+          <div className="flex items-center gap-1 sm:gap-1.5 shrink-0 whitespace-nowrap">
             {/* Wallet Pill */}
             <button
               onClick={() => {
@@ -411,17 +411,17 @@ export const DailyJackpotEntryView: React.FC<DailyJackpotEntryViewProps> = ({
                 if (!user && onOpenSignUp) onOpenSignUp();
                 else onOpenDeposit();
               }}
-              className="flex items-center gap-1.5 pl-2.5 pr-1 py-1 rounded-full bg-[#161616] hover:bg-[#202020] border border-white/10 hover:border-[#E8FF00]/40 active:scale-95 transition-all cursor-pointer shadow-sm"
+              className="flex items-center gap-1 sm:gap-1.5 pl-2 sm:pl-2.5 pr-1 py-1 rounded-full bg-[#161616] hover:bg-[#202020] border border-white/10 hover:border-[#E8FF00]/40 active:scale-95 transition-all cursor-pointer shadow-sm shrink-0 whitespace-nowrap"
               title="Open Wallet Deposit"
             >
-              <Wallet className="w-3.5 h-3.5 text-[#E8FF00] shrink-0" />
-              <div className="flex items-baseline gap-1">
-                <span className="text-[9px] font-arcade font-bold text-white/50">ETB</span>
-                <span className="font-arcade font-black text-xs text-white max-w-[70px] sm:max-w-[100px] truncate">
+              <Wallet className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-[#E8FF00] shrink-0" />
+              <div className="flex items-baseline gap-0.5 sm:gap-1 shrink-0">
+                <span className="text-[8px] sm:text-[9px] font-arcade font-bold text-white/50">ETB</span>
+                <span className="font-arcade font-black text-[11px] sm:text-xs text-white max-w-[50px] xs:max-w-[70px] sm:max-w-[100px] truncate">
                   {user ? (user.walletBalance ?? (user as any).balance ?? 0).toLocaleString() : '0'}
                 </span>
               </div>
-              <div className="w-4 h-4 rounded-full flex items-center justify-center bg-[#E8FF00] text-black">
+              <div className="w-4 h-4 rounded-full flex items-center justify-center bg-[#E8FF00] text-black shrink-0">
                 <Plus className="w-2.5 h-2.5 stroke-[3]" />
               </div>
             </button>
@@ -433,7 +433,7 @@ export const DailyJackpotEntryView: React.FC<DailyJackpotEntryViewProps> = ({
                 telegramSdk.triggerHaptic('light');
                 loadJackpotData(false);
               }}
-              className="p-1.5 rounded-xl bg-[#161616] hover:bg-[#222] border border-white/10 text-white/70 hover:text-white transition-all cursor-pointer"
+              className="p-1.5 rounded-xl bg-[#161616] hover:bg-[#222] border border-white/10 text-white/70 hover:text-white transition-all cursor-pointer shrink-0"
               title="Refresh Catalog"
               aria-label="Refresh Catalog"
             >

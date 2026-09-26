@@ -56,9 +56,11 @@ export function verifyPassword(
     return { isValid: false, needsRehash: false };
   }
 
-  // Handle seeded accounts without password hash (default demo password fallback, auto-upgrades to Scrypt on login)
+  // Handle seeded accounts without password hash:
+  // SECURITY CRITICAL: Universal password123 fallback is strictly disabled in production
+  // and development. Unhashed accounts cannot authenticate with a default backdoor password.
   if (!storedHash) {
-    if (password === 'password123') {
+    if (process.env.NODE_ENV === 'test' && !process.env.DISABLE_TEST_PASSWORD_FALLBACK && password === 'password123') {
       return { isValid: true, needsRehash: true };
     }
     return { isValid: false, needsRehash: false };
@@ -128,8 +130,12 @@ export function verifyPassword(
   }
 
   // Case 3: Legacy hardcoded fallback password for initial mock accounts ('password123')
+  // Strictly restricted to test environments with test fixtures
   if (storedHash === 'password123' || (!storedSalt && password === 'password123')) {
-    return { isValid: password === 'password123', needsRehash: true };
+    if (process.env.NODE_ENV === 'test' && !process.env.DISABLE_TEST_PASSWORD_FALLBACK) {
+      return { isValid: password === 'password123', needsRehash: true };
+    }
+    return { isValid: false, needsRehash: false };
   }
 
   return { isValid: false, needsRehash: false };

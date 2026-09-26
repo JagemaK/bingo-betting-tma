@@ -46,87 +46,87 @@ export const PariMutuelHeader: React.FC<PariMutuelHeaderProps> = ({
 
       {/* 5-Player Special Promo Banner */}
       {isFivePlayerBonus && totalCardsSold > 0 && (
-        <div className="relative z-10 px-4 py-1.5 flex items-center justify-between bg-[#E8FF00]/15 border-b border-[#E8FF00]/30">
-          <div className="flex items-center gap-1.5">
-            <Flame className="w-3.5 h-3.5 text-[#E8FF00] fill-current animate-pulse" />
-            <span className="font-arcade font-black text-xs text-[#E8FF00] tracking-wider uppercase">
+        <div className="relative z-10 px-3 sm:px-4 py-1.5 flex items-center justify-between bg-[#E8FF00]/15 border-b border-[#E8FF00]/30 min-w-0">
+          <div className="flex items-center gap-1.5 min-w-0 flex-1 mr-2">
+            <Flame className="w-3.5 h-3.5 text-[#E8FF00] fill-current animate-pulse shrink-0" />
+            <span className="font-arcade font-black text-xs text-[#E8FF00] tracking-wider uppercase truncate whitespace-nowrap min-w-0">
               5-Player Special · 100% Winner Pot!
             </span>
           </div>
-          <span className="text-[9px] font-arcade font-black px-2 py-0.5 rounded-full bg-[#E8FF00] text-black">
+          <span className="text-[9px] font-arcade font-black px-2 py-0.5 rounded-full bg-[#E8FF00] text-black shrink-0 whitespace-nowrap">
             BONUS
           </span>
         </div>
       )}
 
       {/* Main Prize Header */}
-      <div className="relative z-10 flex items-center justify-between px-4 pt-3.5 pb-2.5">
-        <div className="flex items-center gap-3">
+      <div className="relative z-10 flex items-center justify-between px-3 sm:px-4 pt-3 sm:pt-3.5 pb-2.5 min-w-0 gap-2">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1 mr-1">
           {/* Trophy Frame */}
-          <div className="w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0 bg-[#16180a] border border-[#E8FF00]/40 shadow-[0_0_16px_rgba(232,255,0,0.25)]">
-            <Trophy className="w-6 h-6 text-[#E8FF00]" />
+          <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-2xl flex items-center justify-center shrink-0 bg-[#16180a] border border-[#E8FF00]/40 shadow-[0_0_16px_rgba(232,255,0,0.25)]">
+            <Trophy className="w-5 h-5 sm:w-6 sm:h-6 text-[#E8FF00]" />
           </div>
 
-          <div>
-            <div className="flex items-center gap-1 mb-0.5">
-              <span className="font-arcade font-extrabold text-[10px] tracking-wider uppercase text-white/50">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1 mb-0.5 min-w-0">
+              <span className="font-arcade font-extrabold text-[9px] sm:text-[10px] tracking-wider uppercase text-white/50 truncate whitespace-nowrap">
                 1st Bingo Prize ({winnerPct}%)
               </span>
             </div>
             {/* Prize Amount */}
-            <div className="font-arcade font-black text-2xl leading-none text-[#E8FF00] tracking-tight drop-shadow-[0_0_12px_rgba(232,255,0,0.4)]">
+            <div className="font-arcade font-black text-xl sm:text-2xl leading-none text-[#E8FF00] tracking-tight drop-shadow-[0_0_12px_rgba(232,255,0,0.4)] truncate whitespace-nowrap">
               {formatCurrency(winnerAmount)}
             </div>
           </div>
         </div>
 
         {/* Player & Card Counter Badges */}
-        <div className="flex items-center gap-1.5 flex-shrink-0">
-          <div className="flex items-center gap-1 px-2.5 py-1 rounded-xl text-xs font-arcade font-bold bg-[#161616] border border-white/10 text-white/80">
-            <Users className="w-3 h-3 text-[#E8FF00]" />
+        <div className="flex items-center gap-1 sm:gap-1.5 shrink-0 whitespace-nowrap">
+          <div className="flex items-center gap-1 px-2 sm:px-2.5 py-1 rounded-xl text-xs font-arcade font-bold bg-[#161616] border border-white/10 text-white/80 shrink-0 whitespace-nowrap">
+            <Users className="w-3 h-3 text-[#E8FF00] shrink-0" />
             <span>{activePlayersCount}P</span>
           </div>
           <div
-            className={`flex items-center gap-1 px-2.5 py-1 rounded-xl text-xs font-arcade font-bold border ${
+            className={`flex items-center gap-1 px-2 sm:px-2.5 py-1 rounded-xl text-xs font-arcade font-bold border shrink-0 whitespace-nowrap ${
               isReady
                 ? 'bg-[#E8FF00]/15 text-[#E8FF00] border-[#E8FF00]/40'
                 : 'bg-[#161616] text-white/60 border-white/10'
             }`}
           >
-            <Ticket className="w-3 h-3" />
+            <Ticket className="w-3 h-3 shrink-0" />
             <span>{totalCardsSold}/{minCardsToStart}</span>
           </div>
         </div>
       </div>
 
       {/* 3-Column Stat Strip */}
-      <div className="relative z-10 grid grid-cols-3 gap-2 px-4 pb-3">
+      <div className="relative z-10 grid grid-cols-3 gap-1.5 sm:gap-2 px-3 sm:px-4 pb-3 min-w-0">
         {/* Total Pool */}
-        <div className="rounded-xl p-2 text-center bg-[#161616] border border-white/5">
-          <div className="font-arcade text-[9px] font-bold uppercase tracking-wider text-white/40 mb-0.5">
+        <div className="rounded-xl p-2 text-center bg-[#161616] border border-white/5 min-w-0 overflow-hidden">
+          <div className="font-arcade text-[9px] font-bold uppercase tracking-wider text-white/40 mb-0.5 truncate whitespace-nowrap">
             Total Pool
           </div>
-          <div className="font-arcade text-xs font-black text-white">
+          <div className="font-arcade text-xs font-black text-white truncate whitespace-nowrap">
             {formatCurrency(totalPot)}
           </div>
         </div>
 
         {/* Winner Share */}
-        <div className="rounded-xl p-2 text-center bg-[#E8FF00]/[0.08] border border-[#E8FF00]/20">
-          <div className="font-arcade text-[9px] font-bold uppercase tracking-wider text-[#E8FF00] mb-0.5">
+        <div className="rounded-xl p-2 text-center bg-[#E8FF00]/[0.08] border border-[#E8FF00]/20 min-w-0 overflow-hidden">
+          <div className="font-arcade text-[9px] font-bold uppercase tracking-wider text-[#E8FF00] mb-0.5 truncate whitespace-nowrap">
             Winner ({winnerPct}%)
           </div>
-          <div className="font-arcade text-xs font-black text-[#E8FF00]">
+          <div className="font-arcade text-xs font-black text-[#E8FF00] truncate whitespace-nowrap">
             {formatCurrency(winnerAmount)}
           </div>
         </div>
 
         {/* House Takeout */}
-        <div className="rounded-xl p-2 text-center bg-[#161616] border border-white/5">
-          <div className="font-arcade text-[9px] font-bold uppercase tracking-wider text-white/40 mb-0.5">
+        <div className="rounded-xl p-2 text-center bg-[#161616] border border-white/5 min-w-0 overflow-hidden">
+          <div className="font-arcade text-[9px] font-bold uppercase tracking-wider text-white/40 mb-0.5 truncate whitespace-nowrap">
             Rake ({houseRakePct}%)
           </div>
-          <div className="font-arcade text-xs font-semibold text-white/40">
+          <div className="font-arcade text-xs font-semibold text-white/40 truncate whitespace-nowrap">
             {formatCurrency(houseRakeAmt)}
           </div>
         </div>

@@ -73,6 +73,8 @@ export function calculateDailyGrandJackpot(cardsSold: number): DailyJackpotCalcu
   };
 }
 
+export const calculateWeekendJackpot = calculateDailyGrandJackpot;
+
 /**
  * Returns YYYY-MM-DD in Africa/Addis_Ababa timezone
  */
@@ -86,10 +88,52 @@ export function getAddisAbabaDateString(date: Date = new Date()): string {
 }
 
 /**
- * Returns ISO string for 12:00:00 PM Addis Ababa time (UTC+3) on given YYYY-MM-DD
+ * Returns ISO string for Addis Ababa time (UTC+3) on given YYYY-MM-DD
  */
-export function getAddisAbabaCutoff(dateStr: string): string {
-  return `${dateStr}T12:00:00+03:00`;
+export function getAddisAbabaCutoff(dateStr: string, timeStr = '12:00:00'): string {
+  const normalizedTime = timeStr.length === 5 ? `${timeStr}:00` : timeStr;
+  return `${dateStr}T${normalizedTime}+03:00`;
+}
+
+/**
+ * Returns day of week (0=Sunday, 1=Monday, ..., 6=Saturday) in Africa/Addis_Ababa
+ */
+export function getAddisAbabaWeekday(date: Date = new Date()): number {
+  const dayStr = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Africa/Addis_Ababa',
+    weekday: 'short'
+  }).format(date);
+  const map: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  return map[dayStr] ?? 0;
+}
+
+/**
+ * Returns target Sunday date and cutoff ISO string for Weekend Jackpot
+ */
+export function getNextAddisAbabaSunday(refDate: Date = new Date(), startTime: string = '10:00'): { dateStr: string; cutoffAt: string } {
+  const parts = getAddisAbabaTimeParts(refDate);
+  const weekday = getAddisAbabaWeekday(refDate);
+
+  const [startHourStr, startMinStr] = (startTime || '10:00').split(':');
+  const startHour = parseInt(startHourStr || '10', 10);
+  const startMin = parseInt(startMinStr || '0', 10);
+
+  let daysToAdd = 0;
+  if (weekday === 0) {
+    if (parts.hour < startHour || (parts.hour === startHour && parts.minute < startMin)) {
+      daysToAdd = 0;
+    } else {
+      daysToAdd = 7;
+    }
+  } else {
+    daysToAdd = 7 - weekday;
+  }
+
+  const targetDate = new Date(refDate.getTime() + daysToAdd * 24 * 60 * 60 * 1000);
+  const dateStr = getAddisAbabaDateString(targetDate);
+  const normalizedTime = startTime.length === 5 ? `${startTime}:00` : (startTime.length === 8 ? startTime : `${startTime}:00`);
+  const cutoffAt = `${dateStr}T${normalizedTime}+03:00`;
+  return { dateStr, cutoffAt };
 }
 
 /**
@@ -166,22 +210,34 @@ export class DailyJackpotService {
   }
 
   /**
-   * Get or create current active/open round for Addis Ababa
+   * Get or create current active/open round for Addis Ababa Weekend Jackpot
    */
   public getOrCreateCurrentRound(): DailyJackpotRoundRow {
-    const todayDate = getAddisAbabaDateString();
-    const cutoff = getAddisAbabaCutoff(todayDate);
+    const config = this.db.getWeekendJackpotConfig();
+    const { dateStr, cutoffAt } = getNextAddisAbabaSunday(new Date(), config.start_time || '10:00');
 
-    // First check today's round
-    let round = this.db.getDailyJackpotRoundByDate(todayDate);
+    // First check target Sunday's round
+    let round = this.db.getDailyJackpotRoundByDate(dateStr);
     if (!round) {
-      // Check if there is an active postponed round that hasn't finished
+      // Check if there is an active postponed/rolled-over round that hasn't finished
       const recentRounds = this.db.getAllDailyJackpotRounds(5);
-      const postponed = recentRounds.find(r => r.status === 'POSTPONED');
-      if (postponed) {
-        return postponed;
+      const activeRolledOver = recentRounds.find(r => r.status === 'POSTPONED' || r.status === 'JACKPOT_READY' || (r.status === 'REGISTRATION_OPEN' && r.date_str !== dateStr));
+      if (activeRolledOver) {
+        if (activeRolledOver.cards_sold >= (config.min_cards || 100) && activeRolledOver.status === 'POSTPONED') {
+          round = this.db.updateDailyJackpotRound(activeRolledOver.id, {
+            status: 'JACKPOT_READY',
+            postponement_reason: null
+          });
+          return round;
+        }
+        return activeRolledOver;
       }
-      round = this.db.getOrCreateDailyJackpotRound(todayDate, cutoff);
+      round = this.db.getOrCreateDailyJackpotRound(dateStr, cutoffAt);
+    } else if (round.status === 'POSTPONED' && round.cards_sold >= (config.min_cards || 100)) {
+      round = this.db.updateDailyJackpotRound(round.id, {
+        status: 'JACKPOT_READY',
+        postponement_reason: null
+      });
     }
     return round;
   }
@@ -210,6 +266,7 @@ export class DailyJackpotService {
     } | null;
   } {
     const round = this.getOrCreateCurrentRound();
+    const config = this.db.getWeekendJackpotConfig();
     const calc = calculateDailyGrandJackpot(round.cards_sold);
     const serverTime = new Date().toISOString();
 
@@ -224,20 +281,21 @@ export class DailyJackpotService {
       };
     }
 
+    const minCards = config.min_cards || 100;
     return {
       roundId: round.id,
       date: round.date_str,
       status: round.status,
       cardsSold: round.cards_sold,
-      maxCards: 200,
-      minCards: 100,
-      cardPrice: 999,
+      maxCards: config.max_cards || 200,
+      minCards,
+      cardPrice: config.card_price || 999,
       jackpotAmount: round.status === 'COMPLETED' ? round.jackpot_amount : (calc.isEligible ? calc.jackpotAmount : 100000),
       cutoffTime: round.cutoff_at,
       serverTime,
-      isPostponed: round.status === 'POSTPONED',
-      postponementMessage: round.status === 'POSTPONED'
-        ? (round.postponement_reason || 'Not enough cards were sold to start today\'s jackpot. Minimum required: 100 cards. Registration remains open for the next Daily Grand Jackpot at 12:00 PM.')
+      isPostponed: round.status === 'POSTPONED' && round.cards_sold < minCards,
+      postponementMessage: (round.status === 'POSTPONED' && round.cards_sold < minCards)
+        ? (round.postponement_reason || `Weekend Jackpot postponed: Not enough cards were sold to start the jackpot. Minimum required: ${minCards} cards. Registration remains open for the next Weekend Jackpot on ${config.day_of_week} at ${config.start_time}.`)
         : null,
       myTickets,
       winner: winnerInfo
@@ -335,15 +393,30 @@ export class DailyJackpotService {
       fingerprintSecret: this.secretSeed
     });
 
+    // Check if the purchase pushed a postponed round over the 100-card threshold
+    const updatedRound = this.db.getDailyJackpotRound(round.id);
+    if (updatedRound) {
+      if (updatedRound.cards_sold >= 100 && updatedRound.status === 'POSTPONED') {
+        this.db.updateDailyJackpotRound(round.id, {
+          status: 'JACKPOT_READY',
+          postponement_reason: null
+        });
+      } else if (updatedRound.status === 'POSTPONED') {
+        this.db.updateDailyJackpotRound(round.id, {
+          postponement_reason: `Daily Grand Jackpot postponed: Not enough cards were sold to start today's jackpot. Minimum required: 100 cards. Current cards sold: ${updatedRound.cards_sold}/100. Registration remains open for the next Daily Grand Jackpot at 12:00 PM.`
+        });
+      }
+    }
+
     // Notify sockets
     if (this.io) {
-      const updatedRound = this.db.getDailyJackpotRound(round.id);
-      if (updatedRound) {
+      const refreshed = this.db.getDailyJackpotRound(round.id);
+      if (refreshed) {
         this.io.emit('DAILY_JACKPOT_UPDATED', {
           roundId: round.id,
-          cardsSold: updatedRound.cards_sold,
+          cardsSold: refreshed.cards_sold,
           maxCards: 200,
-          status: updatedRound.status
+          status: refreshed.status
         });
       }
     }
@@ -385,17 +458,20 @@ export class DailyJackpotService {
     const todayDate = getAddisAbabaDateString();
     this.lastEvaluatedDate = todayDate;
 
+    const config = this.db.getWeekendJackpotConfig();
+    const minCards = config.min_cards || 100;
+
     // Check minimum threshold
-    if (round.cards_sold < 100) {
+    if (round.cards_sold < minCards) {
       // POSTPONE
-      const reason = `Daily Grand Jackpot postponed: Not enough cards were sold to start today's jackpot. Minimum required: 100 cards. Current cards sold: ${round.cards_sold}/100. Registration remains open for the next Daily Grand Jackpot at 12:00 PM.`;
+      const reason = `Weekend Jackpot postponed: Not enough cards were sold to start today's jackpot. Minimum required: ${minCards} cards. Current cards sold: ${round.cards_sold}/${minCards}. Registration remains open for the next Weekend Jackpot on ${config.day_of_week} at ${config.start_time}.`;
       
-      const tomorrowCutoff = new Date(Date.parse(round.cutoff_at) + 24 * 60 * 60 * 1000).toISOString();
+      const nextSunday = getNextAddisAbabaSunday(new Date(Date.now() + 24 * 60 * 60 * 1000), config.start_time);
       const updated = this.db.updateDailyJackpotRound(round.id, {
         status: 'POSTPONED',
         checked_at: now,
         postponement_reason: reason,
-        cutoff_at: tomorrowCutoff
+        cutoff_at: nextSunday.cutoffAt
       });
 
       if (this.io) {
@@ -404,7 +480,7 @@ export class DailyJackpotService {
           status: 'POSTPONED',
           message: reason,
           cardsSold: round.cards_sold,
-          minCards: 100
+          minCards
         });
       }
 
@@ -448,7 +524,7 @@ export class DailyJackpotService {
 
     // Fallback if no pattern matched by ball 75 (guarantee a winner among participants)
     if (!winningTicket) {
-      winningTicket = tickets[Math.floor(Math.random() * tickets.length)];
+      winningTicket = tickets[crypto.randomInt(0, tickets.length)];
     }
 
     // Record winner atomically in database
@@ -492,7 +568,7 @@ export class DailyJackpotService {
     return {
       success: true,
       status: 'COMPLETED',
-      message: `Daily Grand Jackpot won by @${winningTicket.username} on Card #${winningTicket.card_number}! Payout: ${calc.jackpotAmount.toLocaleString()} ETB.`,
+      message: `Weekend Jackpot won by @${winningTicket.username} on Card #${winningTicket.card_number}! Payout: ${calc.jackpotAmount.toLocaleString()} ETB.`,
       round: finishedRound,
       winner: winnerData
     };
@@ -504,13 +580,21 @@ export class DailyJackpotService {
   public checkMissedEvaluations(): void {
     try {
       const time = getAddisAbabaTimeParts();
-      const todayDate = getAddisAbabaDateString();
-      const round = this.db.getDailyJackpotRoundByDate(todayDate);
+      const weekday = getAddisAbabaWeekday();
+      const round = this.getOrCreateCurrentRound();
+      if (!round || round.status === 'COMPLETED') return;
 
-      // If at or past 12:00 PM Addis Ababa and the round has not yet finished or postponed
-      if (time.hour >= 12 && round && (round.status === 'REGISTRATION_OPEN' || round.status === 'REGISTRATION_CLOSED' || round.status === 'CHECKING_ELIGIBILITY')) {
-        console.log(`[DailyJackpotService] Recovery catch-up: 12:00 PM cutoff passed for ${todayDate} (status=${round.status}). Evaluating jackpot...`);
-        this.evaluateDailyJackpot();
+      const config = this.db.getWeekendJackpotConfig();
+      const [sh, sm] = (config.start_time || '10:00').split(':').map(s => parseInt(s, 10));
+      const cutoffMs = Date.parse(round.cutoff_at);
+      const isPastCutoff = Date.now() >= cutoffMs;
+      const isSunday = weekday === 0;
+      const isAfterStartTime = time.hour > sh || (time.hour === sh && time.minute >= sm);
+
+      // If at or past cutoff or Sunday past configured start time
+      if ((isPastCutoff || (isSunday && isAfterStartTime)) && (round.status === 'REGISTRATION_OPEN' || round.status === 'JACKPOT_READY' || round.status === 'REGISTRATION_CLOSED' || round.status === 'CHECKING_ELIGIBILITY')) {
+        console.log(`[DailyJackpotService] Recovery catch-up: Cutoff reached for round ${round.id} (status=${round.status}, cards_sold=${round.cards_sold}). Evaluating jackpot...`);
+        this.evaluateDailyJackpot(round.id);
       }
     } catch (err) {
       console.error('[DailyJackpotService] Error checking missed evaluations:', err);
@@ -529,15 +613,21 @@ export class DailyJackpotService {
     this.schedulerInterval = setInterval(() => {
       try {
         const time = getAddisAbabaTimeParts();
+        const weekday = getAddisAbabaWeekday();
         const todayDate = getAddisAbabaDateString();
+        const config = this.db.getWeekendJackpotConfig();
+        const [sh, sm] = (config.start_time || '10:00').split(':').map(s => parseInt(s, 10));
 
-        // Check if 12:00 PM Addis Ababa has been reached and today's round needs evaluation
-        if (time.hour >= 12) {
-          const round = this.db.getDailyJackpotRoundByDate(todayDate);
-          if (round && (round.status === 'REGISTRATION_OPEN' || round.status === 'REGISTRATION_CLOSED' || round.status === 'CHECKING_ELIGIBILITY')) {
+        // Check if Sunday (0) and at/past start time
+        const isSunday = weekday === 0;
+        const isPastStartTime = time.hour > sh || (time.hour === sh && time.minute >= sm);
+
+        if (isSunday && isPastStartTime) {
+          const round = this.getOrCreateCurrentRound();
+          if (round && round.status !== 'COMPLETED' && (round.status === 'REGISTRATION_OPEN' || round.status === 'JACKPOT_READY' || round.status === 'REGISTRATION_CLOSED' || round.status === 'CHECKING_ELIGIBILITY')) {
             if (this.lastEvaluatedDate !== todayDate) {
-              console.log(`[DailyJackpotService] 12:00 PM Addis Ababa reached for ${todayDate}. Evaluating jackpot...`);
-              this.evaluateDailyJackpot();
+              console.log(`[DailyJackpotService] Weekend Jackpot scheduled time reached for ${todayDate}. Evaluating jackpot round ${round.id}...`);
+              this.evaluateDailyJackpot(round.id);
             }
           }
         }

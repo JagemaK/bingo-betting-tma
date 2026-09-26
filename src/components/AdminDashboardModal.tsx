@@ -93,6 +93,7 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
   // Search & Filter state
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
+  const [userTypeFilter, setUserTypeFilter] = useState<'REAL' | 'ALL' | 'ADMIN' | 'BOT' | 'GUEST' | 'TEST' | 'BANNED'>('REAL');
   const [txTypeFilter, setTxTypeFilter] = useState<string>('ALL');
 
   // Pagination for Users
@@ -147,7 +148,7 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
   // Reset pagination when search query or filter changes
   useEffect(() => {
     setUsersPage(1);
-  }, [searchQuery, filterStatus]);
+  }, [searchQuery, filterStatus, userTypeFilter]);
 
   const copyToClipboard = (text: string, key: string) => {
     navigator.clipboard.writeText(text);
@@ -203,7 +204,7 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
       if (tab === 'overview') {
         await preloadOverviewData();
       } else if (tab === 'users') {
-        const res = await fetch(apiUrl('/api/admin/users'), { headers: authHeaders });
+        const res = await fetch(apiUrl(`/api/admin/users?filter=${userTypeFilter}`), { headers: authHeaders });
         if (!res.ok) throw new Error('Failed to load users');
         const d = await res.json();
         setUsers(d.users || []);
@@ -278,11 +279,27 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
     }
   };
 
+  const loadUsers = async (filter: string) => {
+    try {
+      const res = await fetch(apiUrl(`/api/admin/users?filter=${filter}`), { headers: authHeaders });
+      if (res.ok) {
+        const d = await res.json();
+        setUsers(d.users || []);
+      }
+    } catch (e) {
+      console.error('Failed to load filtered users:', e);
+    }
+  };
+
   const handleRefreshCurrentTab = async () => {
     setRefreshing(true);
     soundService.playClick();
     telegramSdk.triggerHaptic('light');
-    await loadTabData(activeTab);
+    if (activeTab === 'users') {
+      await loadUsers(userTypeFilter);
+    } else {
+      await loadTabData(activeTab);
+    }
     setRefreshing(false);
   };
 
@@ -576,6 +593,16 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
 
   const filteredUsers = useMemo(() => {
     return users.filter((u) => {
+      const type = u.account_type || (u.is_bot ? 'BOT' : (u.role === 'ADMIN' ? 'ADMIN' : 'REAL'));
+      const matchesType =
+        userTypeFilter === 'ALL' ||
+        (userTypeFilter === 'REAL' && (type === 'REAL' || !u.account_type) && !u.is_bot && u.role !== 'ADMIN') ||
+        (userTypeFilter === 'ADMIN' && (type === 'ADMIN' || u.role === 'ADMIN')) ||
+        (userTypeFilter === 'BOT' && (type === 'BOT' || u.is_bot)) ||
+        (userTypeFilter === 'GUEST' && type === 'GUEST') ||
+        (userTypeFilter === 'TEST' && type === 'TEST') ||
+        (userTypeFilter === 'BANNED' && u.account_status === 'BANNED');
+
       const matchesStatus = filterStatus === 'ALL' || u.account_status === filterStatus;
       const q = searchQuery.toLowerCase().trim();
       const matchesSearch =
@@ -585,9 +612,9 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
         u.id.toLowerCase().includes(q) ||
         (u.telegram_id && u.telegram_id.toLowerCase().includes(q)) ||
         (u.phone && u.phone.toLowerCase().includes(q));
-      return matchesStatus && matchesSearch;
+      return matchesType && matchesStatus && matchesSearch;
     });
-  }, [users, filterStatus, searchQuery]);
+  }, [users, userTypeFilter, filterStatus, searchQuery]);
 
   const paginatedUsers = useMemo(() => {
     const start = (usersPage - 1) * USERS_PER_PAGE;
@@ -629,39 +656,39 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
       {/* ═══════════════════════════════════════════════════════════ */}
       {/* TOP STICKY APPLICATION BAR                                */}
       {/* ═══════════════════════════════════════════════════════════ */}
-      <header className="w-full bg-[#0D0D0D] border-b border-white/[0.08] px-3 sm:px-6 py-2.5 flex items-center justify-between flex-shrink-0 z-30">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <div className="w-8 h-8 rounded-xl bg-amber-500/20 border border-amber-400/50 flex items-center justify-center text-amber-400 flex-shrink-0 shadow-[0_0_12px_rgba(245,158,11,0.2)]">
+      <header className="w-full bg-[#0D0D0D] border-b border-white/[0.08] px-3 sm:px-6 py-2.5 flex items-center justify-between flex-shrink-0 z-30 min-w-0">
+        <div className="flex items-center gap-2 sm:gap-2.5 min-w-0 flex-1 mr-2">
+          <div className="w-8 h-8 rounded-xl bg-amber-500/20 border border-amber-400/50 flex items-center justify-center text-amber-400 shrink-0 shadow-[0_0_12px_rgba(245,158,11,0.2)]">
             <Shield className="w-4 h-4" />
           </div>
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 leading-none">
-              <span className="font-arcade font-black text-sm tracking-tight text-white uppercase">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5 sm:gap-2 leading-none min-w-0">
+              <span className="font-arcade font-black text-xs sm:text-sm tracking-tight text-white uppercase truncate whitespace-nowrap min-w-0">
                 BINGO<span className="text-[#E8FF00]">.BET</span>
               </span>
-              <span className="text-[9px] font-arcade font-bold px-1.5 py-0.5 rounded bg-amber-400/20 text-amber-300 border border-amber-400/40 uppercase">
+              <span className="text-[9px] font-arcade font-bold px-1.5 py-0.5 rounded bg-amber-400/20 text-amber-300 border border-amber-400/40 uppercase shrink-0 whitespace-nowrap">
                 ROOT
               </span>
             </div>
-            <div className="text-[10px] font-arcade text-white/50 tracking-wider hidden sm:block">
+            <div className="text-[10px] font-arcade text-white/50 tracking-wider hidden sm:block truncate whitespace-nowrap">
               BACK-OFFICE FINANCIAL & COMPLIANCE PANEL
             </div>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 whitespace-nowrap">
           {/* Quick Pending Counter Pills */}
           {(pendingDepositsCount > 0 || pendingWithdrawalsCount > 0) && (
-            <div className="hidden md:flex items-center gap-1.5">
+            <div className="hidden md:flex items-center gap-1.5 shrink-0 whitespace-nowrap">
               {pendingDepositsCount > 0 && (
                 <button
                   onClick={() => {
                     setActiveTab('deposits');
                     setFilterStatus('PENDING');
                   }}
-                  className="px-2 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/40 text-amber-300 text-[10px] font-mono font-bold flex items-center gap-1 cursor-pointer animate-pulse"
+                  className="px-2 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/40 text-amber-300 text-[10px] font-mono font-bold flex items-center gap-1 cursor-pointer animate-pulse shrink-0 whitespace-nowrap"
                 >
-                  <ArrowDownToLine className="w-3 h-3" />
+                  <ArrowDownToLine className="w-3 h-3 shrink-0" />
                   <span>{pendingDepositsCount} PENDING DEP</span>
                 </button>
               )}
@@ -671,9 +698,9 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
                     setActiveTab('withdrawals');
                     setFilterStatus('PENDING');
                   }}
-                  className="px-2 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 border border-rose-400/40 text-rose-300 text-[10px] font-mono font-bold flex items-center gap-1 cursor-pointer animate-pulse"
+                  className="px-2 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 border border-rose-400/40 text-rose-300 text-[10px] font-mono font-bold flex items-center gap-1 cursor-pointer animate-pulse shrink-0 whitespace-nowrap"
                 >
-                  <ArrowUpFromLine className="w-3 h-3" />
+                  <ArrowUpFromLine className="w-3 h-3 shrink-0" />
                   <span>{pendingWithdrawalsCount} PENDING WITH</span>
                 </button>
               )}
@@ -685,7 +712,7 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
             onClick={handleRefreshCurrentTab}
             disabled={refreshing || loading}
             title="Refresh current section"
-            className="p-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white/70 hover:text-white transition-all cursor-pointer active:scale-95"
+            className="p-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white/70 hover:text-white transition-all cursor-pointer active:scale-95 shrink-0"
           >
             <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin text-[#E8FF00]' : ''}`} />
           </button>
@@ -697,7 +724,7 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
               telegramSdk.triggerHaptic('light');
               onClose();
             }}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white/80 hover:text-white font-arcade font-bold text-xs transition-all cursor-pointer active:scale-95"
+            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white/80 hover:text-white font-arcade font-bold text-xs transition-all cursor-pointer active:scale-95 shrink-0 whitespace-nowrap"
           >
             <span className="hidden sm:inline">EXIT</span>
             <X className="w-4 h-4" />
@@ -1768,23 +1795,53 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
                       <DollarSign className="w-3.5 h-3.5" />
                       <span>Adjust Balance</span>
                     </button>
-
-                    <div className="flex items-center gap-1">
-                      {['ALL', 'ACTIVE', 'SUSPENDED', 'BANNED'].map((st) => (
-                        <button
-                          key={st}
-                          onClick={() => setFilterStatus(st)}
-                          className={`px-2 py-1 rounded-lg text-xs font-arcade font-bold cursor-pointer transition-all ${
-                            filterStatus === st
-                              ? 'bg-cyan-500 text-black shadow-sm'
-                              : 'bg-white/5 text-white/60 hover:text-white border border-white/10'
-                          }`}
-                        >
-                          {st}
-                        </button>
-                      ))}
-                    </div>
                   </div>
+                </div>
+
+                {/* Account Classification Category Filter Tabs */}
+                <div className="flex flex-wrap items-center gap-1.5 p-1.5 rounded-xl bg-white/[0.03] border border-white/10">
+                  <span className="text-[10px] font-arcade font-bold text-white/40 uppercase px-1">Category:</span>
+                  {([
+                    { id: 'REAL', label: 'Real Users' },
+                    { id: 'ALL', label: 'All Accounts' },
+                    { id: 'ADMIN', label: 'Admins' },
+                    { id: 'BOT', label: 'Bots' },
+                    { id: 'GUEST', label: 'Guests' },
+                    { id: 'TEST', label: 'Test Accounts' },
+                    { id: 'BANNED', label: 'Banned' }
+                  ] as const).map((cat) => (
+                    <button
+                      key={cat.id}
+                      onClick={() => {
+                        setUserTypeFilter(cat.id);
+                        loadUsers(cat.id);
+                      }}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-arcade font-bold cursor-pointer transition-all ${
+                        userTypeFilter === cat.id
+                          ? 'bg-cyan-500 text-black shadow-sm font-black'
+                          : 'bg-white/5 text-white/60 hover:text-white border border-white/10'
+                      }`}
+                    >
+                      {cat.label}
+                    </button>
+                  ))}
+
+                  <div className="h-4 w-[1px] bg-white/10 mx-1 hidden sm:block" />
+
+                  <span className="text-[10px] font-arcade font-bold text-white/40 uppercase px-1 hidden sm:inline">Status:</span>
+                  {['ALL', 'ACTIVE', 'SUSPENDED'].map((st) => (
+                    <button
+                      key={st}
+                      onClick={() => setFilterStatus(st)}
+                      className={`px-2 py-0.5 rounded text-[10px] font-arcade font-bold cursor-pointer transition-all ${
+                        filterStatus === st
+                          ? 'bg-white/20 text-white font-black'
+                          : 'text-white/40 hover:text-white/70'
+                      }`}
+                    >
+                      {st}
+                    </button>
+                  ))}
                 </div>
 
                 {/* Search Bar */}
@@ -1826,6 +1883,21 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
                                       ADMIN
                                     </span>
                                   )}
+                                  <span
+                                    className={`text-[8px] font-mono px-1 rounded uppercase font-bold ${
+                                      (u.account_type === 'REAL' || (!u.account_type && !u.is_bot && u.role !== 'ADMIN'))
+                                        ? 'bg-emerald-500/20 text-emerald-300'
+                                        : (u.account_type === 'ADMIN' || u.role === 'ADMIN')
+                                        ? 'bg-amber-400/20 text-amber-300'
+                                        : (u.account_type === 'BOT' || u.is_bot)
+                                        ? 'bg-purple-500/20 text-purple-300'
+                                        : u.account_type === 'TEST'
+                                        ? 'bg-blue-500/20 text-blue-300'
+                                        : 'bg-slate-500/20 text-slate-300'
+                                    }`}
+                                  >
+                                    {u.account_type || (u.is_bot ? 'BOT' : (u.role === 'ADMIN' ? 'ADMIN' : 'REAL'))}
+                                  </span>
                                 </div>
                                 <div className="text-[10px] font-mono text-white/40">
                                   TG: {u.telegram_id || 'None'}
@@ -1903,6 +1975,7 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
                     <thead>
                       <tr className="border-b border-white/10 bg-white/[0.02] text-white/50 font-arcade font-bold uppercase text-[10px]">
                         <th className="p-3.5">User</th>
+                        <th className="p-3.5">Type</th>
                         <th className="p-3.5">Telegram ID</th>
                         <th className="p-3.5">Phone</th>
                         <th className="p-3.5">Balance</th>
@@ -1914,7 +1987,7 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
                     <tbody className="divide-y divide-white/5">
                       {paginatedUsers.length === 0 ? (
                         <tr>
-                          <td colSpan={7} className="p-8 text-center text-white/40 font-mono">
+                          <td colSpan={8} className="p-8 text-center text-white/40 font-mono">
                             No users found.
                           </td>
                         </tr>
@@ -1926,6 +1999,23 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
                               <td className="p-3.5">
                                 <div className="font-arcade font-bold text-white">{u.username}</div>
                                 <div className="text-[10px] font-mono text-white/40">{u.id}</div>
+                              </td>
+                              <td className="p-3.5">
+                                <span
+                                  className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase ${
+                                    (u.account_type === 'REAL' || (!u.account_type && !u.is_bot && u.role !== 'ADMIN'))
+                                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                      : (u.account_type === 'ADMIN' || u.role === 'ADMIN')
+                                      ? 'bg-amber-400/20 text-amber-300 border border-amber-400/30'
+                                      : (u.account_type === 'BOT' || u.is_bot)
+                                      ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                                      : u.account_type === 'TEST'
+                                      ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                                      : 'bg-slate-500/20 text-slate-300 border border-slate-500/30'
+                                  }`}
+                                >
+                                  {u.account_type || (u.is_bot ? 'BOT' : (u.role === 'ADMIN' ? 'ADMIN' : 'REAL'))}
+                                </span>
                               </td>
                               <td className="p-3.5 font-mono text-white/70">{u.telegram_id || '—'}</td>
                               <td className="p-3.5 font-mono text-white/70">{u.phone || '—'}</td>
@@ -2362,13 +2452,19 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
                             <span className={`px-2 py-0.5 rounded-full text-[9px] font-arcade font-bold uppercase ${
                               dailyJackpotAdmin.currentRound.status === 'REGISTRATION_OPEN'
                                 ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                : dailyJackpotAdmin.currentRound.status === 'JACKPOT_READY'
+                                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 font-black'
                                 : dailyJackpotAdmin.currentRound.status === 'POSTPONED'
-                                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                                ? ((dailyJackpotAdmin.currentRound.cards_sold ?? 0) >= 100
+                                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 font-black'
+                                    : 'bg-amber-500/20 text-amber-300 border border-amber-500/30')
                                 : dailyJackpotAdmin.currentRound.status === 'COMPLETED'
                                 ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
                                 : 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
                             }`}>
-                              {dailyJackpotAdmin.currentRound.status}
+                              {dailyJackpotAdmin.currentRound.status === 'POSTPONED' && (dailyJackpotAdmin.currentRound.cards_sold ?? 0) >= 100
+                                ? 'READY FOR DRAW'
+                                : dailyJackpotAdmin.currentRound.status}
                             </span>
                           </div>
                           <div className="text-[11px] font-mono text-white/50">
@@ -2376,12 +2472,21 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
                           </div>
                         </div>
 
-                        {(dailyJackpotAdmin.currentRound.cards_sold ?? 0) < 100 && (
+                        {(dailyJackpotAdmin.currentRound.cards_sold ?? 0) < 100 ? (
                           <div className="px-3 py-1 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-300 text-[10px] font-mono flex items-center gap-1.5 self-start sm:self-auto">
                             <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
                             <span>{100 - (dailyJackpotAdmin.currentRound.cards_sold ?? 0)} more cards needed to avoid postponement</span>
                           </div>
-                        )}
+                        ) : dailyJackpotAdmin.currentRound.status !== 'COMPLETED' ? (
+                          <button
+                            onClick={handleTriggerJackpotEvaluation}
+                            disabled={evaluatingJackpot}
+                            className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-black font-arcade font-bold text-xs uppercase shadow-[0_0_20px_rgba(16,185,129,0.4)] flex items-center gap-2 transition-all cursor-pointer self-start sm:self-auto disabled:opacity-50"
+                          >
+                            <Sparkles className="w-4 h-4 fill-black" />
+                            <span>{evaluatingJackpot ? 'EVALUATING DRAW...' : 'EVALUATE & DRAW WINNER NOW'}</span>
+                          </button>
+                        ) : null}
                       </div>
 
                       {/* Financial Metrics Grid */}
@@ -2428,23 +2533,47 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
                       </div>
 
                       {/* Postponement & Winner Notifications */}
-                      {dailyJackpotAdmin.currentRound.status === 'POSTPONED' && (
-                        <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-start gap-3">
-                          <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
-                          <div className="space-y-1 text-xs">
-                            <div className="font-arcade font-bold text-amber-300 uppercase">
-                              ROUND POSTPONED: MINIMUM 100 CARDS NOT REACHED
-                            </div>
-                            <div className="text-white/70">
-                              Fewer than 100 cards were sold before 12:00 PM cutoff. In accordance with platform policy, no winner was selected, no funds were disbursed, and players' purchased cards roll over safely to the next daily check.
-                            </div>
-                            {(dailyJackpotAdmin.currentRound.postponed_reason || dailyJackpotAdmin.currentRound.postponement_reason) && (
-                              <div className="text-amber-400/80 font-mono text-[11px]">
-                                Note: {dailyJackpotAdmin.currentRound.postponed_reason || dailyJackpotAdmin.currentRound.postponement_reason}
+                      {(dailyJackpotAdmin.currentRound.status === 'POSTPONED' || dailyJackpotAdmin.currentRound.status === 'JACKPOT_READY') && (
+                        (dailyJackpotAdmin.currentRound.cards_sold ?? 0) >= 100 ? (
+                          <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                            <div className="flex items-start gap-3">
+                              <CheckCircle2 className="w-5 h-5 text-emerald-400 flex-shrink-0 mt-0.5" />
+                              <div className="space-y-1 text-xs">
+                                <div className="font-arcade font-bold text-emerald-300 uppercase">
+                                  MINIMUM 100 CARDS REACHED ({dailyJackpotAdmin.currentRound.cards_sold} CARDS) — READY FOR DRAW
+                                </div>
+                                <div className="text-white/70">
+                                  The minimum 100-card threshold has been met! The calculated player prize is {((dailyJackpotAdmin.currentRound.calculatedJackpot ?? dailyJackpotAdmin.currentRound.calculated_jackpot ?? 0)).toLocaleString()} ETB. You can execute the provably fair draw now.
+                                </div>
                               </div>
-                            )}
+                            </div>
+                            <button
+                              onClick={handleTriggerJackpotEvaluation}
+                              disabled={evaluatingJackpot}
+                              className="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-arcade font-bold text-xs uppercase shadow-[0_0_15px_rgba(16,185,129,0.3)] flex items-center gap-2 transition-all cursor-pointer flex-shrink-0 disabled:opacity-50"
+                            >
+                              <Sparkles className="w-4 h-4 fill-black" />
+                              <span>{evaluatingJackpot ? 'DRAWING...' : 'EXECUTE DRAW NOW'}</span>
+                            </button>
                           </div>
-                        </div>
+                        ) : (
+                          <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-start gap-3">
+                            <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
+                            <div className="space-y-1 text-xs">
+                              <div className="font-arcade font-bold text-amber-300 uppercase">
+                                ROUND POSTPONED: MINIMUM 100 CARDS NOT REACHED
+                              </div>
+                              <div className="text-white/70">
+                                Fewer than 100 cards were sold before 12:00 PM cutoff. In accordance with platform policy, no winner was selected, no funds were disbursed, and players' purchased cards roll over safely to the next daily jackpot.
+                              </div>
+                              {(dailyJackpotAdmin.currentRound.postponed_reason || dailyJackpotAdmin.currentRound.postponement_reason) && (
+                                <div className="text-amber-400/80 font-mono text-[11px]">
+                                  Note: {dailyJackpotAdmin.currentRound.postponed_reason || dailyJackpotAdmin.currentRound.postponement_reason}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )
                       )}
 
                       {dailyJackpotAdmin.currentRound.winner_user_id && (
@@ -2814,19 +2943,19 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
       {/* ═══════════════════════════════════════════════════════════ */}
       <nav
         aria-label="Admin Mobile Navigation"
-        className="lg:hidden fixed bottom-0 inset-x-0 bg-[#0D0D0D]/95 backdrop-blur-xl border-t border-white/[0.08] px-2 py-1.5 flex items-center justify-around z-30 safe-bottom"
+        className="lg:hidden fixed bottom-0 inset-x-0 bg-[#0D0D0D]/95 backdrop-blur-xl border-t border-white/[0.08] px-1 sm:px-2 py-1.5 flex items-center justify-around z-30 safe-bottom min-w-0"
       >
         <button
           onClick={() => {
             setActiveTab('overview');
             soundService.playClick();
           }}
-          className={`flex flex-col items-center gap-1 p-2 rounded-xl transition-all cursor-pointer ${
+          className={`flex flex-col items-center gap-0.5 sm:gap-1 p-1 sm:p-2 rounded-xl transition-all cursor-pointer flex-1 min-w-0 ${
             activeTab === 'overview' ? 'text-amber-400 font-bold' : 'text-white/40 hover:text-white'
           }`}
         >
-          <LayoutDashboard className="w-4 h-4" />
-          <span className="text-[9px] font-arcade">OVERVIEW</span>
+          <LayoutDashboard className="w-4 h-4 shrink-0" />
+          <span className="text-[8px] sm:text-[9px] font-arcade truncate whitespace-nowrap">OVERVIEW</span>
         </button>
 
         <button
@@ -2834,14 +2963,14 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
             setActiveTab('deposits');
             soundService.playClick();
           }}
-          className={`flex flex-col items-center gap-1 p-2 rounded-xl transition-all relative cursor-pointer ${
+          className={`flex flex-col items-center gap-0.5 sm:gap-1 p-1 sm:p-2 rounded-xl transition-all relative cursor-pointer flex-1 min-w-0 ${
             activeTab === 'deposits' ? 'text-amber-400 font-bold' : 'text-white/40 hover:text-white'
           }`}
         >
-          <ArrowDownToLine className="w-4 h-4" />
-          <span className="text-[9px] font-arcade">DEPOSITS</span>
+          <ArrowDownToLine className="w-4 h-4 shrink-0" />
+          <span className="text-[8px] sm:text-[9px] font-arcade truncate whitespace-nowrap">DEPOSITS</span>
           {pendingDepositsCount > 0 && (
-            <span className="absolute top-1 right-1 w-4 h-4 rounded-full bg-amber-400 text-black text-[9px] font-black flex items-center justify-center animate-pulse">
+            <span className="absolute top-0.5 right-1 sm:right-2 w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full bg-amber-400 text-black text-[8px] sm:text-[9px] font-black flex items-center justify-center animate-pulse shrink-0">
               {pendingDepositsCount}
             </span>
           )}
@@ -2852,14 +2981,14 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
             setActiveTab('withdrawals');
             soundService.playClick();
           }}
-          className={`flex flex-col items-center gap-1 p-2 rounded-xl transition-all relative cursor-pointer ${
+          className={`flex flex-col items-center gap-0.5 sm:gap-1 p-1 sm:p-2 rounded-xl transition-all relative cursor-pointer flex-1 min-w-0 ${
             activeTab === 'withdrawals' ? 'text-amber-400 font-bold' : 'text-white/40 hover:text-white'
           }`}
         >
-          <ArrowUpFromLine className="w-4 h-4" />
-          <span className="text-[9px] font-arcade">CASHOUTS</span>
+          <ArrowUpFromLine className="w-4 h-4 shrink-0" />
+          <span className="text-[8px] sm:text-[9px] font-arcade truncate whitespace-nowrap">CASHOUTS</span>
           {pendingWithdrawalsCount > 0 && (
-            <span className="absolute top-1 right-1 w-4 h-4 rounded-full bg-rose-400 text-black text-[9px] font-black flex items-center justify-center animate-pulse">
+            <span className="absolute top-0.5 right-1 sm:right-2 w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full bg-rose-400 text-black text-[8px] sm:text-[9px] font-black flex items-center justify-center animate-pulse shrink-0">
               {pendingWithdrawalsCount}
             </span>
           )}
@@ -2870,12 +2999,12 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
             setActiveTab('users');
             soundService.playClick();
           }}
-          className={`flex flex-col items-center gap-1 p-2 rounded-xl transition-all cursor-pointer ${
+          className={`flex flex-col items-center gap-0.5 sm:gap-1 p-1 sm:p-2 rounded-xl transition-all cursor-pointer flex-1 min-w-0 ${
             activeTab === 'users' ? 'text-amber-400 font-bold' : 'text-white/40 hover:text-white'
           }`}
         >
-          <Users className="w-4 h-4" />
-          <span className="text-[9px] font-arcade">USERS</span>
+          <Users className="w-4 h-4 shrink-0" />
+          <span className="text-[8px] sm:text-[9px] font-arcade truncate whitespace-nowrap">USERS</span>
         </button>
 
         <button
@@ -2883,10 +3012,10 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
             setMobileMenuOpen(true);
             soundService.playClick();
           }}
-          className="flex flex-col items-center gap-1 p-2 rounded-xl text-white/40 hover:text-white transition-all cursor-pointer"
+          className="flex flex-col items-center gap-0.5 sm:gap-1 p-1 sm:p-2 rounded-xl text-white/40 hover:text-white transition-all cursor-pointer flex-1 min-w-0"
         >
-          <MoreHorizontal className="w-4 h-4" />
-          <span className="text-[9px] font-arcade">MORE</span>
+          <MoreHorizontal className="w-4 h-4 shrink-0" />
+          <span className="text-[8px] sm:text-[9px] font-arcade truncate whitespace-nowrap">MORE</span>
         </button>
       </nav>
 

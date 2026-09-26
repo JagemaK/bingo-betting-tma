@@ -178,6 +178,9 @@ export function verifyTelegramInitData(
   if (!botToken) {
     return { isValid: false, error: 'Server configuration error: TELEGRAM_BOT_TOKEN missing' };
   }
+  if (process.env.NODE_ENV === 'production' && botToken.includes('test_mock_bot_token')) {
+    return { isValid: false, error: 'Server configuration error: Mock bot token is strictly forbidden in production' };
+  }
 
   try {
     const searchParams = new URLSearchParams(initData);
@@ -283,7 +286,7 @@ export function createSignedTelegramInitData(
 
 export class AuthService {
   public databaseService: DatabaseService;
-  private botToken: string = process.env.TELEGRAM_BOT_TOKEN || 'test_mock_bot_token_123456:ABCdefGHIjklMNOpqrSTUvwxYZ';
+  private botToken: string = process.env.TELEGRAM_BOT_TOKEN || (process.env.NODE_ENV === 'production' ? '' : 'test_mock_bot_token_123456:ABCdefGHIjklMNOpqrSTUvwxYZ');
 
   // In-flight temporary registration data
   private tempRegistrations: Map<string, { telegramUser: TelegramUserData; referralCode?: string; createdAt: number }> = new Map();
@@ -296,7 +299,11 @@ export class AuthService {
 
   constructor(customDb?: DatabaseService) {
     this.databaseService = customDb || databaseService;
-    this.seedBots();
+    // SECURITY: Bots must NEVER be automatically seeded into the real production customer database.
+    // Development/Production: Bots OFF by default unless explicitly opted-in via ENABLE_BOT_SEEDS=true.
+    if (process.env.NODE_ENV !== 'production' && process.env.ENABLE_BOT_SEEDS === 'true') {
+      this.seedBots();
+    }
   }
 
   private hashPassword(password: string, salt?: string): string {
@@ -322,7 +329,7 @@ export class AuthService {
     return normalizeEthiopianPhone(phone) || '';
   }
 
-  private seedBots() {
+  public seedBots() {
     // Seed standard multiplayer bots in database if missing
     const seedBots = [
       { id: 'usr_0001', username: 'CryptoWhale_99', balance: 2500.0 },
@@ -342,6 +349,7 @@ export class AuthService {
           username: b.username,
           referral_code: `REF_${b.id.toUpperCase()}`,
           is_bot: true,
+          account_type: 'BOT',
           role: 'USER'
         });
         this.databaseService.getOrCreateWallet(b.id, b.balance);
@@ -370,10 +378,28 @@ export class AuthService {
    */
   public async authenticateTelegram(
     initData: string,
-    botToken: string = process.env.TELEGRAM_BOT_TOKEN || this.botToken || '',
-    optionalReferralCode?: string
+    botToken?: string,
+    optionalReferralCode?: string,
+    preventReplay: boolean = (process.env.NODE_ENV === 'production' || process.env.ENABLE_REPLAY_PROTECTION === 'true'),
+    maxAgeSeconds: number = 86400
   ): Promise<TelegramAuthResult> {
-    const verification = verifyTelegramInitData(initData, botToken);
+    const effectiveBotToken = botToken || process.env.TELEGRAM_BOT_TOKEN || this.botToken || '';
+    if (!effectiveBotToken) {
+      return {
+        success: false,
+        status: 'AUTH_ERROR',
+        error: 'Server configuration error: TELEGRAM_BOT_TOKEN missing'
+      };
+    }
+    if (process.env.NODE_ENV === 'production' && effectiveBotToken.includes('test_mock_bot_token')) {
+      return {
+        success: false,
+        status: 'AUTH_ERROR',
+        error: 'Server configuration error: Mock bot token is strictly forbidden in production'
+      };
+    }
+
+    const verification = verifyTelegramInitData(initData, effectiveBotToken, maxAgeSeconds, preventReplay);
     if (!verification.isValid || !verification.user) {
       return {
         success: false,
@@ -389,6 +415,13 @@ export class AuthService {
     const existingUser = this.databaseService.getUserByTelegramId(telegramId);
 
     if (existingUser) {
+      if (existingUser.account_status === 'DELETED' || existingUser.account_status === 'DEACTIVATED' || existingUser.account_status === 'SUSPENDED' || existingUser.account_status === 'BANNED') {
+        return {
+          success: false,
+          status: 'AUTH_ERROR',
+          error: `Your account is ${existingUser.account_status?.toLowerCase() || 'inactive'}. Please contact support.`
+        };
+      }
       if (existingUser.registration_status === 'COMPLETED') {
         // Update user metadata & last login
         const updates: any = {
@@ -622,8 +655,8 @@ export class AuthService {
     }
 
     const user = this.databaseService.getUserById(session.user_id);
-    if (!user || user.account_status === 'BANNED' || user.account_status === 'SUSPENDED') {
-      return { valid: false, status: 'REVOKED', error: 'User account suspended or banned' };
+    if (!user || user.account_status === 'BANNED' || user.account_status === 'SUSPENDED' || user.account_status === 'DELETED' || user.account_status === 'DEACTIVATED') {
+      return { valid: false, status: 'REVOKED', error: `User account is ${user?.account_status?.toLowerCase() || 'inactive'}` };
     }
 
     this.databaseService.touchSession(token);
@@ -721,8 +754,8 @@ export class AuthService {
     };
   }
 
-  public getAllUsers(): any[] {
-    const users = this.databaseService.getAllUsers();
+  public getAllUsers(filter?: string): any[] {
+    const users = this.databaseService.getAllUsers(filter);
     return users.map(u => {
       const w = this.databaseService.getOrCreateWallet(u.id);
       return {
@@ -735,6 +768,7 @@ export class AuthService {
         username: u.username,
         phone: u.phone,
         role: u.role,
+        account_type: u.account_type || (u.is_bot ? 'BOT' : (u.role === 'ADMIN' ? 'ADMIN' : 'REAL')),
         account_status: u.account_status,
         accountStatus: u.account_status,
         registration_status: u.registration_status,
@@ -755,23 +789,45 @@ export class AuthService {
     });
   }
 
-  public updateUserStatus(adminId: string, targetPlayerId: string, status: 'ACTIVE' | 'SUSPENDED' | 'BANNED'): any {
+  public updateUserStatus(
+    adminId: string,
+    targetPlayerId: string,
+    status: 'ACTIVE' | 'SUSPENDED' | 'BANNED' | 'DEACTIVATED' | 'DELETION_REQUESTED' | 'DELETED',
+    reason?: string
+  ): any {
     const user = this.databaseService.getUserById(targetPlayerId);
     if (!user) throw new Error('Target user not found');
+    if ((user.role === 'ADMIN' || user.role === 'SUPER_ADMIN') && status !== 'ACTIVE') {
+      throw new Error('Cannot change administrator account status.');
+    }
+    if (adminId && targetPlayerId && String(adminId).trim() === String(targetPlayerId).trim() && status !== 'ACTIVE') {
+      throw new Error('Self-suspension forbidden: Cannot suspend, ban, or deactivate your own account.');
+    }
 
     const updated = this.databaseService.updateUser(targetPlayerId, { account_status: status });
 
-    if (status === 'BANNED' || status === 'SUSPENDED') {
+    if (status !== 'ACTIVE') {
       this.databaseService.revokeAllUserSessions(targetPlayerId);
     }
 
     ledgerService.recordAuditLog(
       adminId,
-      status === 'BANNED' ? 'BAN_USER' : status === 'SUSPENDED' ? 'SUSPEND_USER' : 'ACTIVATE_USER',
+      status === 'BANNED' ? 'BAN_USER' : status === 'SUSPENDED' ? 'SUSPEND_USER' : `USER_STATUS_${status}`,
       targetPlayerId,
       targetPlayerId,
-      { previousStatus: user.account_status, newStatus: status }
+      { previousStatus: user.account_status, newStatus: status, reason }
     );
+
+    try {
+      this.databaseService.logAgentActivity({
+        actor_id: adminId,
+        actor_role: 'ADMIN',
+        action: `USER_STATUS_${status}`,
+        target_id: targetPlayerId,
+        target_user_id: targetPlayerId,
+        metadata: { old_status: user.account_status, new_status: status, reason }
+      });
+    } catch (e) {}
 
     const w = this.databaseService.getOrCreateWallet(updated.id);
     return {
@@ -798,7 +854,7 @@ export class AuthService {
     const existing = this.databaseService.getUserByPhone(normalizedPhone);
     if (existing) return { success: false, error: 'An account with this phone number already exists. Please log in.' };
 
-    const pendingId = `reg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const pendingId = `reg_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
     const salt = this.generateSalt();
     const passwordHash = this.hashPassword(password, salt);
 
@@ -929,15 +985,51 @@ export class AuthService {
 
     try {
       // 0. Check if user already exists (by playerId, Telegram ID, or registered phone)
-      let existingUser = this.databaseService.getUserById(playerId) ||
-                         this.databaseService.getUserByTelegramId(String(telegramId)) ||
-                         this.databaseService.getUserByPhone(normalizedPhone);
-      if (existingUser) {
+      const userByPhone = this.databaseService.getUserByPhone(normalizedPhone);
+      const userByTg = this.databaseService.getUserByTelegramId(String(telegramId)) || this.databaseService.getUserById(playerId);
+
+      // Account collision / hijacking checks:
+      if (userByPhone && userByTg && userByPhone.id !== userByTg.id) {
+        return {
+          success: false,
+          error: 'This phone number is already registered to a different account.'
+        };
+      }
+
+      if (userByPhone && userByPhone.telegram_id &&
+          !userByPhone.telegram_id.startsWith('phone_') &&
+          !userByPhone.telegram_id.startsWith('web_') &&
+          !userByPhone.telegram_id.startsWith('guest_') &&
+          userByPhone.telegram_id !== String(telegramId)) {
+        return {
+          success: false,
+          error: 'This phone number is already linked to another Telegram account.'
+        };
+      }
+
+      const existingUserCandidate = userByTg || userByPhone;
+      if (existingUserCandidate) {
+        if (existingUserCandidate.account_status === 'BANNED' ||
+            existingUserCandidate.account_status === 'SUSPENDED' ||
+            existingUserCandidate.account_status === 'DELETED') {
+          return {
+            success: false,
+            error: `Your account is ${existingUserCandidate.account_status.toLowerCase()}. Access denied.`
+          };
+        }
+
+        let existingUser = existingUserCandidate;
         // Link Telegram ID to existing account if not yet linked
         if (existingUser.telegram_id !== String(telegramId)) {
           existingUser = this.databaseService.updateUser(existingUser.id, {
             telegram_id: String(telegramId),
             telegram_username: telegramUsername || existingUser.telegram_username,
+            registration_status: 'COMPLETED'
+          });
+        }
+        if (!existingUser.phone && normalizedPhone) {
+          existingUser = this.databaseService.updateUser(existingUser.id, {
+            phone: normalizedPhone,
             registration_status: 'COMPLETED'
           });
         }
@@ -1302,9 +1394,9 @@ export class AuthService {
       return { success: false, error: 'Invalid phone number or password.' };
     }
 
-    if (user.account_status === 'SUSPENDED' || user.account_status === 'BANNED') {
+    if (user.account_status === 'SUSPENDED' || user.account_status === 'BANNED' || user.account_status === 'DELETED' || user.account_status === 'DEACTIVATED') {
       console.warn(`[Auth] AUTH_LOGIN_FAILED reason=ACCOUNT_${user.account_status} userId=${user.id}`);
-      return { success: false, error: 'Account is suspended. Please contact support.' };
+      return { success: false, error: `Account is ${user.account_status.toLowerCase()}. Please contact support.` };
     }
 
     const verifyResult = verifyPassword(pass, user.password_hash, user.password_salt);
@@ -1373,7 +1465,14 @@ export class AuthService {
       ? `${telegramData.first_name} ${telegramData.last_name || ''}`.trim()
       : telegramData.username || 'TelegramPlayer';
 
-    if (!user) {
+    if (user) {
+      if (user.account_status === 'DELETED' || user.account_status === 'DEACTIVATED' || user.account_status === 'SUSPENDED' || user.account_status === 'BANNED') {
+        return {
+          success: false,
+          error: `Your account is ${user.account_status.toLowerCase()}. Please contact support.`
+        };
+      }
+    } else {
       user = this.databaseService.createUser({
         id: playerId,
         telegram_id: telegramId,
@@ -1463,6 +1562,69 @@ export class AuthService {
     };
   }
 
+  public upgradeGuestAccount(
+    guestPlayerId: string,
+    phone: string,
+    pass: string,
+    name?: string
+  ): AuthResponse {
+    if (!guestPlayerId) {
+      return { success: false, error: 'Guest player ID is required.' };
+    }
+    const guestUser = this.databaseService.getUserById(guestPlayerId);
+    if (!guestUser) {
+      return { success: false, error: 'Guest account not found.' };
+    }
+    if (guestUser.account_type !== 'GUEST') {
+      return { success: false, error: 'Account is already a registered account.' };
+    }
+
+    const normalizedPhone = normalizeEthiopianPhone(phone);
+    if (!normalizedPhone) {
+      return { success: false, error: 'Please enter a valid Ethiopian phone number (e.g. 0912345678 or +251912345678).' };
+    }
+    if (!pass || pass.length < 6) {
+      return { success: false, error: 'Password must be at least 6 characters.' };
+    }
+
+    const existingPhoneUser = this.databaseService.getUserByPhone(normalizedPhone);
+    if (existingPhoneUser && existingPhoneUser.id !== guestPlayerId) {
+      return { success: false, error: 'An account with this phone number already exists. Please log in.' };
+    }
+
+    const cleanName = (name || guestUser.username || `Player_${normalizedPhone.slice(-4)}`).trim();
+    const { hash, salt } = hashPassword(pass);
+
+    const updated = this.databaseService.updateUser(guestUser.id, {
+      username: cleanName,
+      phone: normalizedPhone,
+      password_hash: hash,
+      password_salt: salt,
+      account_type: 'REAL',
+      registration_status: 'COMPLETED'
+    });
+
+    const wallet = this.databaseService.getOrCreateWallet(updated.id);
+    const session = this.databaseService.createSession(updated.id, updated.telegram_id);
+
+    return {
+      success: true,
+      user: {
+        playerId: updated.id,
+        username: updated.username,
+        walletBalance: wallet.balance,
+        avatarUrl: updated.avatar_url,
+        isBot: false,
+        role: updated.role,
+        account_status: updated.account_status
+      },
+      token: session.id,
+      sessionToken: session.id,
+      requiresVerification: false,
+      message: 'Guest account successfully upgraded to real account.'
+    };
+  }
+
   public getFullProfile(playerId: string) {
     const user = this.getUserById(playerId);
     if (!user) return null;
@@ -1501,6 +1663,338 @@ export class AuthService {
       avatarUrl: user.avatarUrl,
       isBot: Boolean(user.isBot)
     };
+  }
+
+  public createAgent(
+    superAdminId: string,
+    agentData: {
+      username: string;
+      phone: string;
+      password?: string;
+      telebirr_number?: string;
+      assigned_agent_name?: string;
+    }
+  ) {
+    const { username, phone, password, telebirr_number, assigned_agent_name } = agentData;
+    if (!username || username.trim().length < 2) {
+      throw new Error('Agent name must be at least 2 characters.');
+    }
+    const normalizedPhone = normalizeEthiopianPhone(phone);
+    if (!normalizedPhone) {
+      throw new Error('Please enter a valid Ethiopian phone number for the agent (e.g. 09XXXXXXXX).');
+    }
+    const existing = this.databaseService.getUserByPhone(normalizedPhone);
+    if (existing) {
+      throw new Error('A user or agent with this phone number already exists.');
+    }
+
+    const pass = password && password.length >= 6 ? password : 'AgentPassword123!';
+    const { hash, salt } = hashPassword(pass);
+    const agentId = `agt_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+    const referralCode = this.generateUniqueReferralCode(username.trim());
+
+    const formatTelebirrNumber = (num?: string): string | undefined => {
+      if (!num) return undefined;
+      const cleaned = num.trim().replace(/\s+/g, '');
+      if (cleaned.startsWith('+251')) return '0' + cleaned.slice(4);
+      if (cleaned.startsWith('251')) return '0' + cleaned.slice(3);
+      return cleaned;
+    };
+
+    const created = this.databaseService.createUser({
+      id: agentId,
+      telegram_id: `agent_${normalizedPhone}`,
+      username: username.trim(),
+      phone: normalizedPhone,
+      telebirr_number: telebirr_number ? formatTelebirrNumber(telebirr_number) : formatTelebirrNumber(normalizedPhone),
+      assigned_agent_name: assigned_agent_name?.trim() || username.trim(),
+      password_hash: hash,
+      password_salt: salt,
+      referral_code: referralCode,
+      role: 'AGENT',
+      account_status: 'ACTIVE',
+      registration_status: 'COMPLETED',
+      account_type: 'AGENT'
+    });
+
+    this.databaseService.logAgentActivity({
+      actor_id: superAdminId,
+      actor_role: 'SUPER_ADMIN',
+      action: 'AGENT_CREATED',
+      target_id: created.id,
+      metadata: { username: created.username, phone: created.phone, telebirr_number: created.telebirr_number }
+    });
+
+    return created;
+  }
+
+  public updateAgent(
+    superAdminId: string,
+    agentId: string,
+    data: {
+      username?: string;
+      phone?: string;
+      telebirr_number?: string;
+      assigned_agent_name?: string;
+      status?: 'ACTIVE' | 'SUSPENDED' | 'BANNED' | 'DEACTIVATED' | 'DELETED';
+      account_status?: 'ACTIVE' | 'SUSPENDED' | 'BANNED' | 'DEACTIVATED' | 'DELETED';
+    }
+  ) {
+    const agent = this.databaseService.getUserById(agentId);
+    if (!agent || agent.role !== 'AGENT') {
+      throw new Error('Agent not found.');
+    }
+
+    const updatePayload: any = {};
+    if (data.username) updatePayload.username = data.username.trim();
+    if (data.phone) {
+      const norm = normalizeEthiopianPhone(data.phone);
+      if (!norm) throw new Error('Invalid phone number format');
+      updatePayload.phone = norm;
+    }
+    if (data.telebirr_number !== undefined) {
+      const cleaned = data.telebirr_number ? data.telebirr_number.trim().replace(/\s+/g, '') : null;
+      updatePayload.telebirr_number = cleaned ? (cleaned.startsWith('+251') ? '0' + cleaned.slice(4) : (cleaned.startsWith('251') ? '0' + cleaned.slice(3) : cleaned)) : null;
+    }
+    if (data.assigned_agent_name !== undefined) {
+      updatePayload.assigned_agent_name = data.assigned_agent_name?.trim() || null;
+    }
+    const targetStatus = data.status || data.account_status;
+    if (targetStatus) {
+      updatePayload.account_status = targetStatus;
+      if (targetStatus !== 'ACTIVE') {
+        this.databaseService.revokeAllUserSessions(agentId);
+      }
+    }
+
+    const updated = this.databaseService.updateUser(agentId, updatePayload);
+
+    this.databaseService.logAgentActivity({
+      actor_id: superAdminId,
+      actor_role: 'SUPER_ADMIN',
+      action: targetStatus ? (targetStatus === 'SUSPENDED' ? 'AGENT_SUSPENDED' : targetStatus === 'ACTIVE' ? 'AGENT_ACTIVATED' : targetStatus === 'DELETED' ? 'AGENT_DELETED' : 'AGENT_UPDATED') : 'AGENT_UPDATED',
+      target_id: agentId,
+      metadata: { changes: data }
+    });
+
+    return updated;
+  }
+
+  public deleteAgent(
+    superAdminId: string,
+    agentId: string,
+    reason?: string
+  ): {
+    success: boolean;
+    action: 'ARCHIVED' | 'HARD_DELETED';
+    archived: boolean;
+    deleted: boolean;
+    historicalTransactionsCount: number;
+    message: string;
+  } {
+    const agent = this.databaseService.getUserById(agentId);
+    if (!agent || agent.role !== 'AGENT') {
+      throw new Error('Agent not found.');
+    }
+    if (superAdminId && agentId && String(superAdminId).trim() === String(agentId).trim()) {
+      throw new Error('Self-deletion forbidden: Cannot delete your own account.');
+    }
+
+    const processedDeposits = (this.databaseService.getDb().prepare(
+      'SELECT COUNT(*) as c FROM deposit_requests WHERE processed_by = ? OR assigned_agent_id = ?'
+    ).get(agentId, agentId) as any)?.c || 0;
+
+    const processedWithdrawals = (this.databaseService.getDb().prepare(
+      'SELECT COUNT(*) as c FROM withdrawal_requests WHERE processed_by = ? OR assigned_agent_id = ?'
+    ).get(agentId, agentId) as any)?.c || 0;
+
+    const totalOps = processedDeposits + processedWithdrawals;
+
+    // Revoke all sessions and unassign from payment accounts
+    this.databaseService.revokeAllUserSessions(agentId);
+    this.databaseService.getDb().prepare(
+      'UPDATE payment_accounts SET assigned_agent_id = NULL WHERE assigned_agent_id = ?'
+    ).run(agentId);
+
+    if (totalOps > 0) {
+      this.databaseService.updateUser(agentId, {
+        account_status: 'DELETED'
+      });
+
+      this.databaseService.logAgentActivity({
+        actor_id: superAdminId,
+        actor_role: 'SUPER_ADMIN',
+        action: 'AGENT_ARCHIVED',
+        target_id: agentId,
+        metadata: { reason: reason || 'Safely archived agent to preserve financial transaction history', totalOps }
+      });
+
+      return {
+        success: true,
+        action: 'ARCHIVED',
+        archived: true,
+        deleted: false,
+        historicalTransactionsCount: totalOps,
+        message: `Agent ${agent.username} processed or was assigned to ${totalOps} financial transactions. The account has been deactivated and safely archived to preserve financial records.`
+      };
+    } else {
+      this.databaseService.getDb().prepare('DELETE FROM agent_activity_logs WHERE actor_id = ?').run(agentId);
+      this.databaseService.getDb().prepare('DELETE FROM wallets WHERE user_id = ?').run(agentId);
+      this.databaseService.getDb().prepare('DELETE FROM users WHERE id = ?').run(agentId);
+
+      this.databaseService.logAgentActivity({
+        actor_id: superAdminId,
+        actor_role: 'SUPER_ADMIN',
+        action: 'AGENT_DELETED',
+        target_id: agentId,
+        metadata: { reason: reason || 'Permanently deleted agent with 0 transactions' }
+      });
+
+      return {
+        success: true,
+        action: 'HARD_DELETED',
+        archived: false,
+        deleted: true,
+        historicalTransactionsCount: 0,
+        message: `Agent ${agent.username} had no transaction dependencies and was permanently deleted.`
+      };
+    }
+  }
+
+  public restoreAgent(superAdminId: string, agentId: string) {
+    const agent = this.databaseService.getUserById(agentId);
+    if (!agent || agent.role !== 'AGENT') {
+      throw new Error('Agent not found.');
+    }
+
+    const updated = this.databaseService.updateUser(agentId, {
+      account_status: 'ACTIVE'
+    });
+
+    this.databaseService.logAgentActivity({
+      actor_id: superAdminId,
+      actor_role: 'SUPER_ADMIN',
+      action: 'AGENT_ACTIVATED',
+      target_id: agentId,
+      metadata: { note: 'Agent restored/reactivated by Super Admin' }
+    });
+
+    return updated;
+  }
+
+  public deleteUser(
+    superAdminId: string,
+    userId: string,
+    reason?: string
+  ): { success: boolean; action: 'ARCHIVED' | 'HARD_DELETED'; archived: boolean; deleted: boolean; historicalRecordsCount: number; message: string } {
+    const user = this.databaseService.getUserById(userId);
+    if (!user) {
+      throw new Error('User not found.');
+    }
+    if (user.role === 'ADMIN' || user.role === 'SUPER_ADMIN' || user.id === 'system') {
+      throw new Error('Cannot delete system administrator account.');
+    }
+    if (superAdminId && userId && String(superAdminId).trim() === String(userId).trim()) {
+      throw new Error('Self-deletion forbidden: Cannot delete your own account.');
+    }
+
+    const depCount = (this.databaseService.getDb().prepare(
+      'SELECT COUNT(*) as c FROM deposit_requests WHERE user_id = ?'
+    ).get(userId) as any)?.c || 0;
+
+    const withCount = (this.databaseService.getDb().prepare(
+      'SELECT COUNT(*) as c FROM withdrawal_requests WHERE user_id = ?'
+    ).get(userId) as any)?.c || 0;
+
+    const ledgerCount = (this.databaseService.getDb().prepare(
+      'SELECT COUNT(*) as c FROM ledger_transactions WHERE user_id = ?'
+    ).get(userId) as any)?.c || 0;
+
+    const jackpotCount = (this.databaseService.getDb().prepare(
+      'SELECT COUNT(*) as c FROM daily_jackpot_tickets WHERE user_id = ?'
+    ).get(userId) as any)?.c || 0;
+
+    const bingoCount = (this.databaseService.getDb().prepare(
+      'SELECT COUNT(*) as c FROM player_tickets WHERE user_id = ?'
+    ).get(userId) as any)?.c || 0;
+
+    const totalFinancial = depCount + withCount + ledgerCount + jackpotCount + bingoCount;
+
+    // Revoke user sessions
+    this.databaseService.revokeAllUserSessions(userId);
+
+    if (totalFinancial > 0) {
+      this.databaseService.updateUser(userId, {
+        account_status: 'DELETED'
+      });
+
+      this.databaseService.logAgentActivity({
+        actor_id: superAdminId,
+        actor_role: 'SUPER_ADMIN',
+        action: 'USER_ACCOUNT_ARCHIVED',
+        target_id: userId,
+        target_user_id: userId,
+        metadata: { reason: reason || 'Account archived to preserve financial records', totalFinancial }
+      });
+
+      return {
+        success: true,
+        action: 'ARCHIVED',
+        archived: true,
+        deleted: false,
+        historicalRecordsCount: totalFinancial,
+        message: `User ${user.username} has ${totalFinancial} financial and gaming records. Account access has been disabled and status marked as DELETED. All transaction and audit records are preserved.`
+      };
+    } else {
+      this.databaseService.getDb().prepare('DELETE FROM reward_claims WHERE user_id = ?').run(userId);
+      this.databaseService.getDb().prepare('DELETE FROM wallets WHERE user_id = ?').run(userId);
+      this.databaseService.getDb().prepare('DELETE FROM users WHERE id = ?').run(userId);
+
+      this.databaseService.logAgentActivity({
+        actor_id: superAdminId,
+        actor_role: 'SUPER_ADMIN',
+        action: 'USER_HARD_DELETED',
+        target_id: userId,
+        target_user_id: userId,
+        metadata: { reason: reason || 'Permanently deleted user with 0 records' }
+      });
+
+      return {
+        success: true,
+        action: 'HARD_DELETED',
+        archived: false,
+        deleted: true,
+        historicalRecordsCount: 0,
+        message: `User ${user.username} had no financial records and was permanently removed.`
+      };
+    }
+  }
+
+  public resetAgentPassword(superAdminId: string, agentId: string, newPass: string) {
+    const agent = this.databaseService.getUserById(agentId);
+    if (!agent || agent.role !== 'AGENT') {
+      throw new Error('Agent not found.');
+    }
+    if (!newPass || newPass.length < 6) {
+      throw new Error('New password must be at least 6 characters.');
+    }
+
+    const { hash, salt } = hashPassword(newPass);
+    this.databaseService.updateUser(agentId, {
+      password_hash: hash,
+      password_salt: salt
+    });
+
+    this.databaseService.revokeAllUserSessions(agentId);
+
+    this.databaseService.logAgentActivity({
+      actor_id: superAdminId,
+      actor_role: 'SUPER_ADMIN',
+      action: 'AGENT_PASSWORD_RESET',
+      target_id: agentId
+    });
+
+    return { success: true, message: `Password reset successfully for agent ${agent.username}.` };
   }
 }
 

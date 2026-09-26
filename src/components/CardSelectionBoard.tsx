@@ -48,6 +48,7 @@ interface CardSelectionBoardProps {
   onOpenAdmin?: () => void;
   onSelectCurrency: (c: CurrencyType) => void;
   onRefresh: () => void;
+  hasRewardNotification?: boolean;
 }
 
 // Deterministic fallback card generator for instant UI preview
@@ -94,6 +95,7 @@ export const CardSelectionBoard: React.FC<CardSelectionBoardProps> = ({
   onOpenLogin,
   onOpenProfile,
   onOpenAdmin,
+  hasRewardNotification = false,
 }) => {
   // View mode: 'matrix' (Default 200-card multi-select grid) vs 'inspector' (Single 5x5 card inspect)
   const [viewMode, setViewMode] = useState<'matrix' | 'inspector'>('matrix');
@@ -469,15 +471,15 @@ export const CardSelectionBoard: React.FC<CardSelectionBoardProps> = ({
         {/* ══════════════════════════════════════════════════ */}
         {/* MATRIX VS INSPECTOR MODE TOGGLE                    */}
         {/* ══════════════════════════════════════════════════ */}
-        <div className="flex items-center justify-between gap-2 px-1">
-          <div className="flex items-center gap-1.5">
+        <div className="flex items-center justify-between gap-2 px-1 min-w-0">
+          <div className="flex items-center gap-1.5 min-w-0 shrink-0">
             <button
               onClick={() => {
                 setViewMode('matrix');
                 soundService.playClick();
                 telegramSdk.triggerHaptic('light');
               }}
-              className={`px-3 py-1.5 rounded-xl font-arcade text-xs font-bold transition-all uppercase cursor-pointer ${
+              className={`px-2.5 sm:px-3 py-1.5 rounded-xl font-arcade text-[11px] sm:text-xs font-bold transition-all uppercase cursor-pointer shrink-0 whitespace-nowrap ${
                 viewMode === 'matrix'
                   ? 'bg-[#E8FF00] text-black shadow-[0_0_10px_rgba(232,255,0,0.3)]'
                   : 'bg-[#141414] text-white/60 border border-white/10'
@@ -492,7 +494,7 @@ export const CardSelectionBoard: React.FC<CardSelectionBoardProps> = ({
                 soundService.playClick();
                 telegramSdk.triggerHaptic('light');
               }}
-              className={`px-3 py-1.5 rounded-xl font-arcade text-xs font-bold transition-all uppercase cursor-pointer ${
+              className={`px-2.5 sm:px-3 py-1.5 rounded-xl font-arcade text-[11px] sm:text-xs font-bold transition-all uppercase cursor-pointer shrink-0 whitespace-nowrap ${
                 viewMode === 'inspector'
                   ? 'bg-[#E8FF00] text-black shadow-[0_0_10px_rgba(232,255,0,0.3)]'
                   : 'bg-[#141414] text-white/60 border border-white/10'
@@ -502,7 +504,7 @@ export const CardSelectionBoard: React.FC<CardSelectionBoardProps> = ({
             </button>
           </div>
 
-          <span className="font-arcade text-xs text-white/50">
+          <span className="font-arcade text-[11px] sm:text-xs text-white/50 shrink-0 whitespace-nowrap">
             SELECTED: <strong className="text-[#E8FF00]">{selectedCards.size}</strong>
           </span>
         </div>
@@ -511,15 +513,15 @@ export const CardSelectionBoard: React.FC<CardSelectionBoardProps> = ({
         {/* MODE 1: 200-CARD MULTI-SELECT GRID (DEFAULT)       */}
         {/* ══════════════════════════════════════════════════ */}
         {viewMode === 'matrix' && (
-          <div className="p-3.5 rounded-2xl bg-[#111111] border border-white/10 space-y-3 shadow-sm">
+          <div className="p-3 sm:p-3.5 rounded-2xl bg-[#111111] border border-white/10 space-y-3 shadow-sm min-w-0">
             {/* Filter Tabs & Search */}
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-1 p-1 rounded-xl bg-[#161616] border border-white/5 text-xs">
+            <div className="flex items-center justify-between gap-1.5 sm:gap-2 min-w-0">
+              <div className="flex items-center gap-1 p-1 rounded-xl bg-[#161616] border border-white/5 text-xs shrink-0 overflow-x-auto no-scrollbar">
                 {(['all', 'available', 'mine'] as const).map((tab) => (
                   <button
                     key={tab}
                     onClick={() => setFilterTab(tab)}
-                    className={`px-2.5 py-1 rounded-lg font-arcade font-bold uppercase transition-all cursor-pointer ${
+                    className={`px-2 sm:px-2.5 py-1 rounded-lg font-arcade font-bold uppercase transition-all cursor-pointer shrink-0 whitespace-nowrap ${
                       filterTab === tab
                         ? 'bg-[#E8FF00] text-black'
                         : 'text-white/50 hover:text-white'
@@ -530,14 +532,14 @@ export const CardSelectionBoard: React.FC<CardSelectionBoardProps> = ({
                 ))}
               </div>
 
-              <div className="relative">
-                <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-white/40" />
+              <div className="relative shrink-0">
+                <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-white/40 shrink-0" />
                 <input
                   type="text"
                   placeholder="# Card"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-24 pl-7 pr-2.5 py-1 rounded-xl text-xs bg-[#161616] border border-white/10 text-white placeholder-white/30 focus:outline-none focus:border-[#E8FF00] font-arcade"
+                  className="w-20 sm:w-24 pl-7 pr-2 py-1 rounded-xl text-xs bg-[#161616] border border-white/10 text-white placeholder-white/30 focus:outline-none focus:border-[#E8FF00] font-arcade shrink-0"
                 />
               </div>
             </div>
@@ -690,31 +692,31 @@ export const CardSelectionBoard: React.FC<CardSelectionBoardProps> = ({
       {/* ══════════════════════════════════════════════════ */}
       {/* STICKY BOTTOM BUY BAR (TOTAL BIRR & GIANT CTA)     */}
       {/* ══════════════════════════════════════════════════ */}
-      <div className="fixed bottom-[92px] left-0 right-0 z-30 px-4 max-w-2xl mx-auto">
-        <div className="p-3.5 rounded-2xl flex items-center justify-between gap-3 bg-[#111111]/95 border-2 border-[#E8FF00]/40 backdrop-blur-xl shadow-[0_0_25px_rgba(0,0,0,0.8)]">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="font-arcade text-[10px] uppercase font-bold text-white/50 block">
+      <div className="fixed bottom-[84px] sm:bottom-[92px] left-0 right-0 z-30 px-2 sm:px-4 max-w-2xl mx-auto">
+        <div className="p-2.5 sm:p-3.5 rounded-2xl flex items-center justify-between gap-2 sm:gap-3 bg-[#111111]/95 border-2 border-[#E8FF00]/40 backdrop-blur-xl shadow-[0_0_25px_rgba(0,0,0,0.8)] min-w-0">
+          <div className="min-w-0 flex-1 mr-1">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="font-arcade text-[9px] sm:text-[10px] uppercase font-bold text-white/50 truncate whitespace-nowrap min-w-0">
                 TOTAL STAKE ({selectedCount} CARDS)
               </span>
               {uncommittedCount > 0 && (
-                <span className="text-[9px] font-arcade font-bold px-1.5 py-0.2 rounded bg-[#E8FF00]/20 text-[#E8FF00] border border-[#E8FF00]/40">
+                <span className="text-[8px] sm:text-[9px] font-arcade font-bold px-1.5 py-0.2 rounded bg-[#E8FF00]/20 text-[#E8FF00] border border-[#E8FF00]/40 shrink-0 whitespace-nowrap">
                   {uncommittedCount} NEW
                 </span>
               )}
             </div>
-            <div className="font-arcade font-black text-2xl text-[#E8FF00] leading-tight drop-shadow-[0_0_10px_rgba(232,255,0,0.3)]">
+            <div className="font-arcade font-black text-xl sm:text-2xl text-[#E8FF00] leading-tight drop-shadow-[0_0_10px_rgba(232,255,0,0.3)] truncate whitespace-nowrap">
               {formatCurrency(totalCost)}
             </div>
-            <div className="text-[10px] font-arcade text-white/40 truncate">
-              Wallet Bal: <span className="text-white font-bold">{formatUserBalance()}</span>
+            <div className="text-[9px] sm:text-[10px] font-arcade text-white/40 truncate whitespace-nowrap">
+              Wallet: <span className="text-white font-bold">{formatUserBalance()}</span>
             </div>
           </div>
 
           <button
             onClick={handleLockInBatchCards}
             disabled={isLocking}
-            className={`btn-neon text-sm font-arcade font-black uppercase py-3.5 px-6 rounded-2xl flex items-center gap-2 shadow-[0_0_20px_rgba(232,255,0,0.4)] cursor-pointer active:scale-95 ${
+            className={`btn-neon text-xs sm:text-sm font-arcade font-black uppercase py-2.5 sm:py-3.5 px-3 sm:px-6 rounded-2xl flex items-center gap-1.5 sm:gap-2 shadow-[0_0_20px_rgba(232,255,0,0.4)] cursor-pointer active:scale-95 shrink-0 whitespace-nowrap ${
               uncommittedCount > 0 ? 'animate-pulse' : ''
             }`}
           >
@@ -722,17 +724,17 @@ export const CardSelectionBoard: React.FC<CardSelectionBoardProps> = ({
               <span>LOCKING...</span>
             ) : uncommittedCount > 0 ? (
               <>
-                <Lock className="w-4 h-4 stroke-[3]" />
+                <Lock className="w-3.5 h-3.5 sm:w-4 sm:h-4 stroke-[3] shrink-0" />
                 <span>BUY {uncommittedCount} TICKETS</span>
               </>
             ) : selectedCount > 0 ? (
               <>
-                <Check className="w-4 h-4 stroke-[3]" />
+                <Check className="w-3.5 h-3.5 sm:w-4 sm:h-4 stroke-[3] shrink-0" />
                 <span>READY ({roomState.totalCardsSold}/5)</span>
               </>
             ) : (
               <>
-                <Shuffle className="w-4 h-4 stroke-[3]" />
+                <Shuffle className="w-3.5 h-3.5 sm:w-4 sm:h-4 stroke-[3] shrink-0" />
                 <span>LUCKY PICK 1</span>
               </>
             )}
@@ -749,6 +751,7 @@ export const CardSelectionBoard: React.FC<CardSelectionBoardProps> = ({
         onOpenLeaderboard={onOpenLeaderboard}
         onOpenRules={onOpenRules}
         inGame={true}
+        hasRewardNotification={hasRewardNotification}
       />
     </div>
   );
