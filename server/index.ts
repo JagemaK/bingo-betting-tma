@@ -64,6 +64,8 @@ export const isOriginAllowed = (origin?: string): boolean => {
   if (allowedOrigins.includes(normalized)) return true;
   // Dynamically match any trycloudflare.com tunnel
   if (/^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/i.test(normalized)) return true;
+  // Dynamically match any vercel.app domain
+  if (/^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(normalized)) return true;
   // Dynamically match any localhost / 127.0.0.1 port
   if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(normalized)) return true;
   return false;
