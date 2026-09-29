@@ -6,11 +6,11 @@
   "rewrites": [
     {
       "source": "/api/:match*",
-      "destination": "https://pts-lan-thomas-increased.trycloudflare.com/api/:match*"
+      "destination": "https://networks-laser-and-mating.trycloudflare.com/api/:match*"
     },
     {
       "source": "/socket.io/:match*",
-      "destination": "https://pts-lan-thomas-increased.trycloudflare.com/socket.io/:match*"
+      "destination": "https://networks-laser-and-mating.trycloudflare.com/socket.io/:match*"
     },
     {
       "source": "/(.*)",
