@@ -54,5 +54,9 @@ scratch/
 *.db-wal
 *.db-shm
 *.sqlite
+data/*.db
+data/*.db-wal
+data/*.db-shm
 data/
+*.bak
 .vercel
