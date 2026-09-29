@@ -10,13 +10,22 @@
  */
 
 function resolveBackendUrl(): string {
-  // 1. Direct Vite env variable replacement (statically replaced by Vite at build/runtime)
+  // 1. If currently accessed via a Cloudflare Tunnel or other tunnel, ALWAYS use current window origin!
+  // This guarantees that even if a build-time env var is stale, clients connecting via the live tunnel work instantly.
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    const host = window.location.hostname;
+    if (host.includes('trycloudflare.com') || host.includes('ngrok') || host.includes('loca.lt')) {
+      return window.location.origin.replace(/\/+$/, '');
+    }
+  }
+
+  // 2. Direct Vite env variable replacement (statically replaced by Vite at build/runtime)
   const envUrl = import.meta.env.VITE_BACKEND_URL;
   if (typeof envUrl === 'string' && envUrl.trim().length > 0) {
     return envUrl.trim().replace(/\/+$/, '');
   }
 
-  // 2. Query param override ONLY permitted in local development on loopback interfaces
+  // 3. Query param override ONLY permitted in local development on loopback interfaces
   // (Prevents token/initData exfiltration attacks via crafted Mini App URLs)
   if (import.meta.env.DEV && typeof window !== 'undefined' && window.location?.search) {
     const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
@@ -29,21 +38,21 @@ function resolveBackendUrl(): string {
     }
   }
 
-  // 3. If accessing via remote domain or tunnel (e.g. trycloudflare.com), use window.location.origin
+  // 4. If accessing via remote domain (e.g. Vercel deployment), use window.location.origin
   if (typeof window !== 'undefined' && window.location?.origin) {
     if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-      return window.location.origin;
+      return window.location.origin.replace(/\/+$/, '');
     }
   }
 
-  // 4. In dev mode without explicit VITE_BACKEND_URL on localhost, default to local backend on port 3001
+  // 5. In dev mode without explicit VITE_BACKEND_URL on localhost, default to local backend on port 3001
   if (import.meta.env.DEV) {
     return 'http://localhost:3001';
   }
 
-  // 5. In browser production / fallback, use window.location.origin
+  // 6. In browser production / fallback, use window.location.origin
   if (typeof window !== 'undefined' && window.location?.origin) {
-    return window.location.origin;
+    return window.location.origin.replace(/\/+$/, '');
   }
 
   return 'http://localhost:3001';
