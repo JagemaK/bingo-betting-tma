@@ -22,7 +22,8 @@
     "react-dom": "^18.3.1",
     "socket.io": "^4.8.1",
     "socket.io-client": "^4.8.1",
-    "tailwind-merge": "^2.5.5"
+    "tailwind-merge": "^2.5.5",
+    "undici": "^8.11.2"
   },
   "devDependencies": {
     "@types/canvas-confetti": "^1.9.0",
