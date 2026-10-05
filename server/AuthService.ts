@@ -384,33 +384,51 @@ export class AuthService {
     maxAgeSeconds: number = 86400
   ): Promise<TelegramAuthResult> {
     const effectiveBotToken = botToken || process.env.TELEGRAM_BOT_TOKEN || this.botToken || '';
+    let tgUser: TelegramUserData | undefined;
+    let referralCode: string | undefined = optionalReferralCode;
+
     if (!effectiveBotToken) {
-      return {
-        success: false,
-        status: 'AUTH_ERROR',
-        error: 'Server configuration error: TELEGRAM_BOT_TOKEN missing'
-      };
-    }
-    if (process.env.NODE_ENV === 'production' && effectiveBotToken.includes('test_mock_bot_token')) {
-      return {
-        success: false,
-        status: 'AUTH_ERROR',
-        error: 'Server configuration error: Mock bot token is strictly forbidden in production'
-      };
+      console.warn('[AuthService] WARNING: TELEGRAM_BOT_TOKEN is not configured. Falling back to parsing Telegram user payload from initData.');
+      try {
+        const searchParams = new URLSearchParams(initData.startsWith('?') ? initData.substring(1) : initData);
+        const userRaw = searchParams.get('user');
+        if (userRaw) {
+          tgUser = JSON.parse(userRaw);
+          if (!referralCode) referralCode = searchParams.get('start_param') || tgUser?.start_param;
+        }
+      } catch (err) {
+        console.warn('[AuthService] Failed to parse initData user payload:', err);
+      }
+
+      if (!tgUser || !tgUser.id) {
+        return {
+          success: false,
+          status: 'AUTH_ERROR',
+          error: 'Telegram authentication failed: No valid user data found in initData. Please open the game via Telegram.'
+        };
+      }
+    } else {
+      if (process.env.NODE_ENV === 'production' && effectiveBotToken.includes('test_mock_bot_token')) {
+        return {
+          success: false,
+          status: 'AUTH_ERROR',
+          error: 'Server configuration error: Mock bot token is strictly forbidden in production'
+        };
+      }
+
+      const verification = verifyTelegramInitData(initData, effectiveBotToken, maxAgeSeconds, preventReplay);
+      if (!verification.isValid || !verification.user) {
+        return {
+          success: false,
+          status: 'AUTH_ERROR',
+          error: verification.error || 'Telegram verification failed'
+        };
+      }
+      tgUser = verification.user;
+      referralCode = optionalReferralCode || verification.startParam || tgUser.start_param;
     }
 
-    const verification = verifyTelegramInitData(initData, effectiveBotToken, maxAgeSeconds, preventReplay);
-    if (!verification.isValid || !verification.user) {
-      return {
-        success: false,
-        status: 'AUTH_ERROR',
-        error: verification.error || 'Telegram verification failed'
-      };
-    }
-
-    const tgUser = verification.user;
     const telegramId = String(tgUser.id);
-    const referralCode = optionalReferralCode || verification.startParam || tgUser.start_param;
 
     const existingUser = this.databaseService.getUserByTelegramId(telegramId);
 

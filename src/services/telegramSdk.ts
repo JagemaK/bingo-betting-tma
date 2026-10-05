@@ -120,6 +120,12 @@ export class TelegramSdkService {
           return hash;
         }
       }
+      if (window.Telegram?.WebApp?.initDataUnsafe?.user) {
+        const u = window.Telegram.WebApp.initDataUnsafe.user;
+        const authDate = window.Telegram.WebApp.initDataUnsafe.auth_date || Math.floor(Date.now() / 1000);
+        const queryId = window.Telegram.WebApp.initDataUnsafe.query_id || '';
+        return `user=${encodeURIComponent(JSON.stringify(u))}&auth_date=${authDate}${queryId ? `&query_id=${queryId}` : ''}`;
+      }
     }
     return '';
   }

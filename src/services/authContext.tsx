@@ -32,7 +32,7 @@ interface AuthContextType {
   error: string | null;
   isLoading: boolean;
   initAuth: (overrideInitData?: string) => Promise<void>;
-  completeRegistration: (username: string, refCode?: string) => Promise<{ success: boolean; error?: string }>;
+  completeRegistration: (username: string, refCode?: string) => Promise<{ success: boolean; user?: UserAccount; sessionToken?: string; error?: string }>;
   logout: () => Promise<void>;
   updateUser: (u: UserAccount) => void;
   setGuestUser: (guest: UserAccount) => void;
@@ -157,7 +157,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const completeRegistration = useCallback(
-    async (chosenUsername: string, refCode?: string): Promise<{ success: boolean; error?: string }> => {
+    async (chosenUsername: string, refCode?: string): Promise<{ success: boolean; user?: UserAccount; sessionToken?: string; error?: string }> => {
       if (!tempToken) {
         return { success: false, error: 'Registration session expired. Please reopen the Mini App.' };
       }
@@ -193,7 +193,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setStatus('AUTHENTICATED');
         setTempToken(null);
         setIsLoading(false);
-        return { success: true };
+        return { success: true, user: data.user, sessionToken: data.sessionToken };
       } catch (err: any) {
         const msg = err.message || 'Network error during registration';
         setError(msg);

@@ -105,11 +105,28 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   }, [isOpen, initialMode, auth.suggestedUsername, auth.referralCode, hasTelegramTempSession]);
 
   React.useEffect(() => {
-    if (isOpen && mode === 'tg_register' && !auth.tempToken && auth.status !== 'AUTHENTICATED' && auth.status !== 'AUTHENTICATING') {
+    if (
+      isOpen &&
+      mode === 'tg_register' &&
+      !auth.tempToken &&
+      auth.status !== 'AUTHENTICATED' &&
+      auth.status !== 'AUTHENTICATING' &&
+      auth.status !== 'AUTH_ERROR'
+    ) {
       console.log('[AuthModal] Triggering initAuth in tg_register mode');
       auth.initAuth();
     }
   }, [isOpen, mode, auth.tempToken, auth.status]);
+
+  React.useEffect(() => {
+    if (isOpen && auth.status === 'AUTHENTICATED' && auth.user) {
+      if (auth.sessionToken) localStorage.setItem('bingo_auth_token', auth.sessionToken);
+      soundService.playJackpotFanfare();
+      telegramSdk.triggerHaptic('success');
+      onSuccess(auth.user, auth.sessionToken || '');
+      onClose();
+    }
+  }, [isOpen, auth.status, auth.user, auth.sessionToken, onSuccess, onClose]);
 
   React.useEffect(() => {
     if (auth.suggestedUsername && !tgUsername) {
@@ -528,8 +545,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       } else {
         soundService.playJackpotFanfare();
         telegramSdk.triggerHaptic('success');
-        if (auth.user) {
-          onSuccess(auth.user, auth.sessionToken || '');
+        const finalUser = result.user || auth.user;
+        const finalToken = result.sessionToken || auth.sessionToken || '';
+        if (finalUser) {
+          onSuccess(finalUser, finalToken);
         }
         setMode('welcome');
       }
@@ -731,26 +750,42 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   <h3 className="text-sm font-black text-white uppercase tracking-wider">
                     TELEGRAM MINI APP
                   </h3>
-                  <p className="text-[11px] text-white/60 mt-1">
-                    Tap below to connect your Telegram identity, or sign in directly with your Ethiopian phone number.
-                  </p>
+                  <div className="text-[11px] text-white/60 mt-1">
+                    {auth.error ? (
+                      <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-[11px] font-medium leading-relaxed">
+                        {auth.error}
+                      </div>
+                    ) : (
+                      <p>Tap below to connect your Telegram identity, or enter instantly as a Guest.</p>
+                    )}
+                  </div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    soundService.playClick();
-                    auth.initAuth();
-                  }}
-                  className="btn-neon w-full py-2.5 rounded-xl text-xs font-black uppercase tracking-wide flex items-center justify-center gap-2 cursor-pointer"
-                >
-                  <RefreshCw className="w-4 h-4" />
-                  <span>REFRESH TELEGRAM AUTH</span>
-                </button>
+                <div className="space-y-2">
+                  <button
+                    type="button"
+                    onClick={handleGuestPlay}
+                    className="btn-neon w-full py-2.5 rounded-xl text-xs font-black uppercase tracking-wide flex items-center justify-center gap-2 cursor-pointer bg-emerald-500 hover:bg-emerald-400 text-black border-none shadow-[0_0_15px_rgba(16,185,129,0.3)]"
+                  >
+                    <span>⚡ PLAY AS GUEST (INSTANT ENTRY)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      soundService.playClick();
+                      auth.initAuth();
+                    }}
+                    className="w-full py-2.5 rounded-xl text-xs font-arcade font-bold bg-[#1a1a1a] hover:bg-[#242424] border border-[#0088cc]/40 text-[#0088cc] flex items-center justify-center gap-2 cursor-pointer transition-all"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                    <span>RETRY TELEGRAM AUTH</span>
+                  </button>
+                </div>
 
                 <div className="flex items-center gap-2 my-2 text-[10px] text-white/40 font-bold">
                   <div className="flex-1 h-px bg-white/10" />
-                  <span>OR CONTINUE WITH PHONE</span>
+                  <span>OR SIGN IN WITH PHONE</span>
                   <div className="flex-1 h-px bg-white/10" />
                 </div>
 
@@ -777,14 +812,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     className="w-full py-2 rounded-xl text-xs font-arcade text-white/70 hover:text-white flex items-center justify-center gap-1 cursor-pointer"
                   >
                     <span>Already have an account? <strong className="text-[#E8FF00]">Log In</strong></span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleGuestPlay}
-                    className="w-full py-1 text-[11px] font-arcade text-white/40 hover:text-white cursor-pointer"
-                  >
-                    ⚡ Play as Guest (Instant)
                   </button>
                 </div>
               </div>
