@@ -319,10 +319,10 @@ export class TelegramBotService {
 
       // If user already exists with an active/completed account, greet and launch directly!
       if (existingUser && existingUser.registration_status === 'COMPLETED') {
-        const wallet = ledgerService.getWallet(existingUser.id);
+        const userObj = ledgerService.getUser(existingUser.id);
         const welcomeBackText = `👋 <b>እንኳን ደህና መጡ ${existingUser.username || fromUser.first_name}! (Welcome Back!)</b>\n\n` +
           `🇪🇹 <b>BINGO BET</b> - Ethiopia's #1 Live 75-Ball Bingo Betting.\n` +
-          `💰 ቀሪ ሂሳብዎ (Balance): <b>${(wallet?.balance || 0).toFixed(0)} Birr</b>\n\n` +
+          `💰 ቀሪ ሂሳብዎ (Balance): <b>${(userObj?.walletBalance || 0).toFixed(0)} Birr</b>\n\n` +
           `🎮 ከታች ያለውን <b>🎮 Play BINGO BET</b> በመጫን አሁኑኑ መጫወት ይጀምሩ!`;
 
         const welcomeMarkup = {

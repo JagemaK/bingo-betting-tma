@@ -543,8 +543,7 @@ export class AuthService {
         account_status: 'ACTIVE',
         registration_status: 'COMPLETED',
         referred_by: referralCode || undefined,
-        referral_code: newReferralCode,
-        last_login_at: new Date().toISOString()
+        referral_code: newReferralCode
       });
 
       const wallet = this.databaseService.getOrCreateWallet(createdUser.id);
