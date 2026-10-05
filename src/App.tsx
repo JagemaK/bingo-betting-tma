@@ -528,25 +528,70 @@ export default function App() {
     });
   }, [gameState?.gameId, gameState?.tickets?.length, user?.playerId, autoDaub]);
 
-  const handleJoinRoom = (roomId: string) => {
-    if (!user) {
-      handleOpenSignUp('register');
-      return;
-    }
-    if (!socket) return;
-    setActiveRoomId(roomId);
-    socket.emit('JOIN_ROOM', { roomId, playerId: user.playerId }, (res: any) => {
-      if (res.success && res.state) {
-        setGameState(res.state);
-        if (res.state.status === 'active') {
-          setCurrentView('live_game');
+  const handleJoinRoom = async (roomId: string) => {
+    soundService.playClick();
+    telegramSdk.triggerHaptic('medium');
+
+    let currentUser = user || auth.user;
+    if (!currentUser) {
+      // Auto-fallback to instant guest account so the user is never blocked from playing!
+      try {
+        const res = await fetch(apiUrl('/api/auth/guest'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        const data = await res.json();
+        if (data.success && data.user) {
+          currentUser = data.user;
+          setUser(data.user);
+          auth.setGuestUser(data.user);
+          if (data.sessionToken) localStorage.setItem('bingo_auth_token', data.sessionToken);
         } else {
-          setCurrentView('card_selection');
+          handleOpenSignUp('register');
+          return;
         }
-        soundService.playLineChime();
-        telegramSdk.triggerHaptic('medium');
+      } catch {
+        handleOpenSignUp('register');
+        return;
       }
-    });
+    }
+
+    setActiveRoomId(roomId);
+
+    // Immediate HTTP fallback so room opens immediately even if socket is reconnecting
+    try {
+      const res = await fetch(apiUrl(`/api/room/${roomId}`));
+      if (res.ok) {
+        const state = await res.json();
+        if (state && state.roomId === roomId) {
+          setGameState(state);
+          if (state.status === 'active') {
+            setCurrentView('live_game');
+          } else {
+            setCurrentView('card_selection');
+          }
+          soundService.playLineChime();
+        }
+      }
+    } catch (e) {
+      console.warn('HTTP room fetch note:', e);
+    }
+
+    const targetPlayerId = currentUser?.playerId || user?.playerId;
+    if (socket && targetPlayerId) {
+      socket.emit('JOIN_ROOM', { roomId, playerId: targetPlayerId }, (res: any) => {
+        if (res?.success && res?.state) {
+          setGameState(res.state);
+          if (res.state.status === 'active') {
+            setCurrentView('live_game');
+          } else {
+            setCurrentView('card_selection');
+          }
+          soundService.playLineChime();
+          telegramSdk.triggerHaptic('medium');
+        }
+      });
+    }
   };
 
   const handleLeaveRoom = () => {

@@ -11,7 +11,6 @@
 
 function resolveBackendUrl(): string {
   // 1. If currently accessed via a Cloudflare Tunnel or other tunnel, ALWAYS use current window origin!
-  // This guarantees that even if a build-time env var is stale, clients connecting via the live tunnel work instantly.
   if (typeof window !== 'undefined' && window.location?.origin) {
     const host = window.location.hostname;
     if (host.includes('trycloudflare.com') || host.includes('ngrok') || host.includes('loca.lt')) {
@@ -38,24 +37,22 @@ function resolveBackendUrl(): string {
     }
   }
 
-  // 4. If accessing via remote domain (e.g. Vercel deployment), use window.location.origin
-  if (typeof window !== 'undefined' && window.location?.origin) {
-    if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-      return window.location.origin.replace(/\/+$/, '');
-    }
-  }
-
-  // 5. In dev mode without explicit VITE_BACKEND_URL on localhost, default to local backend on port 3001
+  // 4. In dev mode without explicit VITE_BACKEND_URL on localhost, default to local backend on port 3001
   if (import.meta.env.DEV) {
     return 'http://localhost:3001';
   }
 
-  // 6. In browser production / fallback, use window.location.origin
+  // 5. If accessing directly on Render, use window.location.origin
   if (typeof window !== 'undefined' && window.location?.origin) {
-    return window.location.origin.replace(/\/+$/, '');
+    const host = window.location.hostname;
+    if (host.includes('onrender.com')) {
+      return window.location.origin.replace(/\/+$/, '');
+    }
   }
 
-  return 'http://localhost:3001';
+  // 6. In production (including Vercel deployment), route directly to live Render backend!
+  // Vercel serverless does NOT support persistent WebSockets, so Socket.io connects directly to Render.
+  return 'https://bingo-bet-app.onrender.com';
 }
 
 export const BACKEND_URL: string = resolveBackendUrl();

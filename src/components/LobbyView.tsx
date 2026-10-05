@@ -341,10 +341,15 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
             return (
               <div
                 key={room.roomId}
-                className={`relative rounded-3xl p-4 sm:p-5 transition-all duration-200 border flex flex-col justify-between ${
+                onClick={() => {
+                  soundService.playClick();
+                  telegramSdk.triggerHaptic('medium');
+                  onJoinRoom(room.roomId);
+                }}
+                className={`relative rounded-3xl p-4 sm:p-5 transition-all duration-200 border flex flex-col justify-between cursor-pointer active:scale-[0.99] ${
                   isFeatured
-                    ? 'bg-[#14160a] border-[#E8FF00]/50 shadow-[0_0_24px_rgba(232,255,0,0.18)]'
-                    : 'bg-[#121212] border-white/10 hover:border-white/20 shadow-lg'
+                    ? 'bg-[#14160a] border-[#E8FF00]/50 shadow-[0_0_24px_rgba(232,255,0,0.18)] hover:border-[#E8FF00]'
+                    : 'bg-[#121212] border-white/10 hover:border-white/30 shadow-lg'
                 }`}
               >
                 {/* ── ROW 1: HEADER (Stake Pill on Left, Status Badge on Right) ── */}
