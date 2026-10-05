@@ -799,6 +799,33 @@ export class DatabaseService {
       } catch (seedCfgErr) {
         console.warn('[DatabaseService] Jackpot config seed warning:', seedCfgErr);
       }
+
+      // Automatic elevation of configured Super Admin accounts
+      try {
+        const superAdmins = ['mxt_mdn', 'sammy_erk', 'jagema_kello'];
+        const envAdmins = (process.env.SUPER_ADMIN_TELEGRAM_USERNAMES || '')
+          .split(',')
+          .map(s => s.trim().toLowerCase().replace(/^@/, ''))
+          .filter(Boolean);
+        const allTargetSuperAdmins = Array.from(new Set([...superAdmins, ...envAdmins]));
+
+        if (allTargetSuperAdmins.length > 0) {
+          const placeholders = allTargetSuperAdmins.map(() => '?').join(',');
+          const updateStmt = this.db.prepare(`
+            UPDATE users
+            SET role = 'SUPER_ADMIN'
+            WHERE (LOWER(REPLACE(telegram_username, '@', '')) IN (${placeholders})
+               OR LOWER(REPLACE(username, '@', '')) IN (${placeholders}))
+              AND role != 'SUPER_ADMIN'
+          `);
+          const res = updateStmt.run(...allTargetSuperAdmins, ...allTargetSuperAdmins);
+          if (res.changes > 0) {
+            console.log(`[DatabaseService] Elevated ${res.changes} account(s) to SUPER_ADMIN: ${allTargetSuperAdmins.join(', ')}`);
+          }
+        }
+      } catch (adminErr) {
+        console.warn('[DatabaseService] Super admin upgrade warning:', adminErr);
+      }
     } catch (err) {
       console.error('[DatabaseService] Migration check warning:', err);
     }
