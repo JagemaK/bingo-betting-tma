@@ -971,6 +971,69 @@ export class AuthService {
     };
   }
 
+  public updateUserRole(
+    actorId: string,
+    targetPlayerId: string,
+    newRole: UserRole,
+    reason?: string
+  ): any {
+    const validRoles: UserRole[] = ['USER', 'AGENT', 'SUPER_ADMIN', 'ADMIN'];
+    if (!validRoles.includes(newRole)) {
+      throw new Error(`Invalid role: ${newRole}. Must be one of: ${validRoles.join(', ')}`);
+    }
+
+    if (targetPlayerId === 'system') {
+      throw new Error('System account role cannot be modified.');
+    }
+
+    const user = this.databaseService.getUserById(targetPlayerId);
+    if (!user) throw new Error('Target user not found');
+
+    if (actorId && targetPlayerId && String(actorId).trim() === String(targetPlayerId).trim() && newRole !== user.role) {
+      throw new Error('Self-role modification forbidden: You cannot change your own role.');
+    }
+
+    let accountType: any = user.account_type;
+    if (newRole === 'AGENT') {
+      accountType = 'AGENT';
+    } else if (newRole === 'SUPER_ADMIN' || newRole === 'ADMIN') {
+      accountType = 'ADMIN';
+    } else if (newRole === 'USER' && (user.account_type === 'AGENT' || user.account_type === 'ADMIN')) {
+      accountType = 'REAL';
+    }
+
+    const updated = this.databaseService.updateUser(targetPlayerId, {
+      role: newRole,
+      account_type: accountType
+    });
+
+    ledgerService.recordAuditLog(
+      actorId,
+      'USER_ROLE_CHANGED',
+      targetPlayerId,
+      targetPlayerId,
+      { previousRole: user.role, newRole, reason }
+    );
+
+    try {
+      this.databaseService.logAgentActivity({
+        actor_id: actorId,
+        actor_role: 'SUPER_ADMIN',
+        action: 'USER_ROLE_CHANGED',
+        target_id: targetPlayerId,
+        target_user_id: targetPlayerId,
+        metadata: { old_role: user.role, new_role: newRole, reason }
+      });
+    } catch (e) {}
+
+    const w = this.databaseService.getOrCreateWallet(updated.id);
+    return {
+      ...updated,
+      playerId: updated.id,
+      walletBalance: w.balance
+    };
+  }
+
   public logout(token: string): boolean {
     if (!token) return false;
     this.databaseService.revokeSession(token);

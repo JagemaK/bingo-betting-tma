@@ -173,6 +173,9 @@ export const SuperAdminDashboardModal: React.FC<SuperAdminDashboardModalProps> =
   const [statusChangeUserTarget, setStatusChangeUserTarget] = useState<AdminUserDetail | null>(null);
   const [targetUserNewStatus, setTargetUserNewStatus] = useState<string>('ACTIVE');
   const [userStatusReason, setUserStatusReason] = useState('');
+  const [roleChangeUserTarget, setRoleChangeUserTarget] = useState<AdminUserDetail | null>(null);
+  const [targetUserNewRole, setTargetUserNewRole] = useState<'USER' | 'AGENT' | 'SUPER_ADMIN'>('AGENT');
+  const [userRoleReason, setUserRoleReason] = useState('');
 
   // Rejection dialog
   const [rejectDialog, setRejectDialog] = useState<{
@@ -793,6 +796,32 @@ export const SuperAdminDashboardModal: React.FC<SuperAdminDashboardModalProps> =
       setStatusChangeUserTarget(null);
       setUserStatusReason('');
       await Promise.all([fetchUsers(), fetchOverview(), fetchAuditLogs()]);
+    } catch (err: any) {
+      soundService.playError();
+      setError(err.message);
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  const handleUpdateUserRole = async () => {
+    if (!roleChangeUserTarget) return;
+    setProcessingId(`role_usr_${roleChangeUserTarget.id}`);
+    setError(null);
+    try {
+      const res = await fetch(apiUrl(`/api/super-admin/users/${roleChangeUserTarget.id}/role`), {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ role: targetUserNewRole, reason: userRoleReason })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Failed to update user role');
+
+      soundService.playVictory();
+      setSuccessMsg(`User @${roleChangeUserTarget.username} role updated to ${targetUserNewRole}`);
+      setRoleChangeUserTarget(null);
+      setUserRoleReason('');
+      await Promise.all([fetchUsers(), fetchAgents(), fetchOverview(), fetchAuditLogs()]);
     } catch (err: any) {
       soundService.playError();
       setError(err.message);
@@ -1800,6 +1829,7 @@ export const SuperAdminDashboardModal: React.FC<SuperAdminDashboardModalProps> =
                       <th className="py-2.5 px-3">Customer</th>
                       <th className="py-2.5 px-3">Phone</th>
                       <th className="py-2.5 px-3">Status</th>
+                      <th className="py-2.5 px-3">Role</th>
                       <th className="py-2.5 px-3 text-right">Balance</th>
                       <th className="py-2.5 px-3 text-right">Deposits</th>
                       <th className="py-2.5 px-3 text-right">Withdrawals</th>
@@ -1827,6 +1857,23 @@ export const SuperAdminDashboardModal: React.FC<SuperAdminDashboardModalProps> =
                             }`}
                           >
                             {u.account_status || 'ACTIVE'}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3">
+                          <span
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold inline-flex items-center gap-1 ${
+                              u.role === 'SUPER_ADMIN'
+                                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                                : u.role === 'AGENT'
+                                ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/40'
+                                : u.role === 'ADMIN'
+                                ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40'
+                                : 'bg-slate-800 text-slate-300 border border-slate-700'
+                            }`}
+                          >
+                            {u.role === 'SUPER_ADMIN' && '👑'}
+                            {u.role === 'AGENT' && '🛡️'}
+                            {u.role || 'USER'}
                           </span>
                         </td>
                         <td className="py-2.5 px-3 text-right font-mono font-bold text-emerald-400">
@@ -1857,6 +1904,19 @@ export const SuperAdminDashboardModal: React.FC<SuperAdminDashboardModalProps> =
 
                             <button
                               onClick={() => {
+                                setRoleChangeUserTarget(u);
+                                setTargetUserNewRole((u.role === 'SUPER_ADMIN' || u.role === 'AGENT') ? u.role : 'AGENT');
+                                setUserRoleReason('');
+                              }}
+                              className="px-2 py-1 rounded bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[11px] font-medium flex items-center gap-1"
+                              title="Assign Super Admin or Agent Role"
+                            >
+                              <Shield className="w-3 h-3 text-amber-400" />
+                              <span>Role</span>
+                            </button>
+
+                            <button
+                              onClick={() => {
                                 setStatusChangeUserTarget(u);
                                 setTargetUserNewStatus(u.account_status || 'ACTIVE');
                                 setUserStatusReason('');
@@ -1883,7 +1943,7 @@ export const SuperAdminDashboardModal: React.FC<SuperAdminDashboardModalProps> =
                     ))}
                     {usersList.length === 0 && (
                       <tr>
-                        <td colSpan={9} className="py-8 text-center text-slate-400">
+                        <td colSpan={10} className="py-8 text-center text-slate-400">
                           No users found matching query.
                         </td>
                       </tr>
@@ -3253,6 +3313,78 @@ export const SuperAdminDashboardModal: React.FC<SuperAdminDashboardModalProps> =
                 className="px-4 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs"
               >
                 Update Status
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* User Account Role Change Dialog */}
+      {roleChangeUserTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <Shield className="w-5 h-5 text-amber-400" />
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+                  Assign Role for {roleChangeUserTarget.username}
+                </h3>
+              </div>
+              <button
+                onClick={() => setRoleChangeUserTarget(null)}
+                className="text-slate-400 hover:text-white p-1"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-[11px] font-medium text-slate-300 block mb-1">Target Platform Role</label>
+                <select
+                  value={targetUserNewRole}
+                  onChange={(e) => setTargetUserNewRole(e.target.value as any)}
+                  className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none focus:border-amber-500"
+                >
+                  <option value="SUPER_ADMIN">👑 SUPER_ADMIN (Full Platform & Role Authority)</option>
+                  <option value="AGENT">🛡️ AGENT (Finance & Transaction Management)</option>
+                  <option value="USER">👤 USER (Standard Customer / Player)</option>
+                </select>
+                <p className="text-[10px] text-slate-400 mt-1">
+                  {targetUserNewRole === 'SUPER_ADMIN' && 'Grants full Super Admin access to payment numbers, staff management, balance adjustments, and role assignment.'}
+                  {targetUserNewRole === 'AGENT' && 'Grants Agent access to process assigned customer deposit and withdrawal requests.'}
+                  {targetUserNewRole === 'USER' && 'Resets role to standard player with game and wallet participation.'}
+                </p>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-medium text-slate-300 block mb-1">Reason (Optional)</label>
+                <input
+                  type="text"
+                  value={userRoleReason}
+                  onChange={(e) => setUserRoleReason(e.target.value)}
+                  placeholder="e.g. Promoted to Agent / Super Admin..."
+                  className="w-full px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white"
+                />
+              </div>
+            </div>
+
+            <div className="pt-2 flex justify-end gap-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setRoleChangeUserTarget(null)}
+                className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleUpdateUserRole}
+                disabled={Boolean(processingId)}
+                className="px-4 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center gap-1.5"
+              >
+                {processingId === `role_usr_${roleChangeUserTarget.id}` && <Loader2 className="w-3 h-3 animate-spin" />}
+                <span>Assign Role</span>
               </button>
             </div>
           </div>

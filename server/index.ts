@@ -2089,6 +2089,22 @@ app.put('/api/super-admin/users/:id/status', requireSuperAdmin, (req: any, res) 
   }
 });
 
+app.put('/api/super-admin/users/:id/role', requireSuperAdmin, (req: any, res) => {
+  try {
+    const actorId = req.user.playerId || req.user.id;
+    const { role, reason } = req.body;
+    if (!role) {
+      return res.status(400).json({ error: 'Role is required' });
+    }
+    const updated = authService.updateUserRole(actorId, req.params.id, role, reason);
+    io.to(`user_${req.params.id}`).emit('USER_ROLE_CHANGED', { role, reason });
+    io.to('super_admin_room').emit('user:role_updated', { userId: req.params.id, role, updatedBy: actorId });
+    res.json({ success: true, user: updated });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 app.delete('/api/super-admin/users/:id', requireSuperAdmin, (req: any, res) => {
   try {
     const actorId = req.user.playerId || req.user.id;

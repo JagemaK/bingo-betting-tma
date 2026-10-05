@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { DatabaseService } from './DatabaseService.js';
 import { AuthService, createSignedTelegramInitData } from './AuthService.js';
 
-describe('Super Admin Telegram Accounts Designation', () => {
+describe('Super Admin Telegram Accounts Designation & Role Delegation', () => {
   let db: DatabaseService;
   let authService: AuthService;
   const mockBotToken = '123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11';
@@ -99,5 +99,91 @@ describe('Super Admin Telegram Accounts Designation', () => {
     expect(res.user?.role).toBe('SUPER_ADMIN');
     const persisted = db.getUserById(res.user!.playerId);
     expect(persisted?.role).toBe('SUPER_ADMIN');
+  });
+
+  it('allows super admin to change another user role to AGENT', () => {
+    const targetUser = db.createUser({
+      id: 'usr_player1',
+      telegram_id: '12345',
+      username: 'PlayerOne',
+      referral_code: 'REF_P1',
+      role: 'USER'
+    });
+
+    expect(targetUser.role).toBe('USER');
+
+    const updated = authService.updateUserRole('super_admin_1', 'usr_player1', 'AGENT', 'Promoted to agent');
+    expect(updated.role).toBe('AGENT');
+    expect(updated.account_type).toBe('AGENT');
+
+    const persisted = db.getUserById('usr_player1');
+    expect(persisted?.role).toBe('AGENT');
+    expect(persisted?.account_type).toBe('AGENT');
+
+    // Verify user now shows up in getAgentPerformance
+    const agents = db.getAgentPerformance('usr_player1');
+    expect(agents.length).toBe(1);
+    expect(agents[0].username).toBe('PlayerOne');
+  });
+
+  it('allows super admin to change another user role to SUPER_ADMIN', () => {
+    db.createUser({
+      id: 'usr_player2',
+      telegram_id: '67890',
+      username: 'PlayerTwo',
+      referral_code: 'REF_P2',
+      role: 'USER'
+    });
+
+    const updated = authService.updateUserRole('super_admin_1', 'usr_player2', 'SUPER_ADMIN', 'Promoted to super admin');
+    expect(updated.role).toBe('SUPER_ADMIN');
+    expect(updated.account_type).toBe('ADMIN');
+
+    const persisted = db.getUserById('usr_player2');
+    expect(persisted?.role).toBe('SUPER_ADMIN');
+  });
+
+  it('allows super admin to revert an agent or super admin back to USER', () => {
+    db.createUser({
+      id: 'usr_agent_temp',
+      telegram_id: '111222',
+      username: 'TempAgent',
+      referral_code: 'REF_TA',
+      role: 'AGENT',
+      account_type: 'AGENT'
+    });
+
+    const updated = authService.updateUserRole('super_admin_1', 'usr_agent_temp', 'USER', 'Role revoked');
+    expect(updated.role).toBe('USER');
+    expect(updated.account_type).toBe('REAL');
+
+    const persisted = db.getUserById('usr_agent_temp');
+    expect(persisted?.role).toBe('USER');
+    expect(persisted?.account_type).toBe('REAL');
+  });
+
+  it('rejects self-role modification and invalid roles', () => {
+    db.createUser({
+      id: 'admin_self',
+      telegram_id: '999999',
+      username: 'AdminSelf',
+      referral_code: 'REF_AS',
+      role: 'SUPER_ADMIN'
+    });
+
+    // Self-modification forbidden
+    expect(() => {
+      authService.updateUserRole('admin_self', 'admin_self', 'USER');
+    }).toThrow('Self-role modification forbidden');
+
+    // Invalid role rejected
+    expect(() => {
+      authService.updateUserRole('admin_self', 'some_target', 'INVALID_ROLE' as any);
+    }).toThrow('Invalid role');
+
+    // Target not found
+    expect(() => {
+      authService.updateUserRole('admin_self', 'non_existent_id', 'AGENT');
+    }).toThrow('Target user not found');
   });
 });
