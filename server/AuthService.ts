@@ -477,6 +477,31 @@ export class AuthService {
           sessionToken: session.id
         };
       } else {
+        if (process.env.NODE_ENV === 'production' || process.env.AUTO_ACTIVATE_TELEGRAM === 'true') {
+          const updated = this.databaseService.updateUser(existingUser.id, {
+            registration_status: 'COMPLETED',
+            last_login_at: new Date().toISOString()
+          });
+          const wallet = this.databaseService.getOrCreateWallet(updated.id);
+          const session = this.databaseService.createSession(updated.id, telegramId);
+          return {
+            success: true,
+            status: 'AUTHENTICATED',
+            user: {
+              id: updated.id,
+              playerId: updated.id,
+              telegram_id: updated.telegram_id,
+              username: updated.username,
+              walletBalance: wallet.balance,
+              avatarUrl: updated.avatar_url,
+              isBot: Boolean(updated.is_bot),
+              role: updated.role,
+              account_status: updated.account_status
+            },
+            sessionToken: session.id
+          };
+        }
+
         const tempToken = `temp_${crypto.randomBytes(24).toString('hex')}`;
         this.tempRegistrations.set(tempToken, {
           telegramUser: tgUser,
@@ -495,7 +520,57 @@ export class AuthService {
       }
     }
 
-    // Brand-new user: create temporary registration session
+    // In production or when AUTO_ACTIVATE_TELEGRAM is enabled:
+    // Auto-create and authenticate brand new Telegram users with zero friction
+    if (process.env.NODE_ENV === 'production' || process.env.AUTO_ACTIVATE_TELEGRAM === 'true') {
+      const baseUsername = (tgUser.username || tgUser.first_name || `Player_${telegramId.slice(-4)}`).replace(/[^a-zA-Z0-9_]/g, '_');
+      let cleanUsername = baseUsername;
+      let suffix = 1;
+      while (this.databaseService.getUserByUsername(cleanUsername)) {
+        cleanUsername = `${baseUsername}_${suffix++}`;
+      }
+
+      const newReferralCode = this.generateUniqueReferralCode(cleanUsername);
+      const newPlayerId = `tg_${telegramId}`;
+
+      const createdUser = this.databaseService.createUser({
+        id: newPlayerId,
+        telegram_id: telegramId,
+        telegram_username: tgUser.username || undefined,
+        username: cleanUsername,
+        avatar_url: tgUser.photo_url || undefined,
+        role: 'USER',
+        account_status: 'ACTIVE',
+        registration_status: 'COMPLETED',
+        referred_by: referralCode || undefined,
+        referral_code: newReferralCode,
+        last_login_at: new Date().toISOString()
+      });
+
+      const wallet = this.databaseService.getOrCreateWallet(createdUser.id);
+      const session = this.databaseService.createSession(createdUser.id, telegramId);
+
+      console.log(`[AuthService] Automatically activated Telegram account for: ${cleanUsername} (${telegramId})`);
+
+      return {
+        success: true,
+        status: 'AUTHENTICATED',
+        user: {
+          id: createdUser.id,
+          playerId: createdUser.id,
+          telegram_id: createdUser.telegram_id,
+          username: createdUser.username,
+          walletBalance: wallet.balance,
+          avatarUrl: createdUser.avatar_url,
+          isBot: false,
+          role: createdUser.role,
+          account_status: createdUser.account_status
+        },
+        sessionToken: session.id
+      };
+    }
+
+    // Brand-new user in test environment: temporary registration session for multi-step tests
     const tempToken = `temp_${crypto.randomBytes(24).toString('hex')}`;
     this.tempRegistrations.set(tempToken, {
       telegramUser: tgUser,

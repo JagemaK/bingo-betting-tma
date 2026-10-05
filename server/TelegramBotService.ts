@@ -313,38 +313,84 @@ export class TelegramBotService {
       }
 
       // Default /start
-      const webAppUrl = process.env.TELEGRAM_WEBAPP_URL || process.env.WEBAPP_URL || process.env.FRONTEND_URL || 'http://localhost:5173';
-      const welcomeText = `👋 <b>Welcome to BINGO BET!</b>\n\n🇪🇹 Ethiopia's #1 Live 75-Ball Bingo Betting Telegram Mini App.\n\n🎮 Tap <b>"Launch BINGO BET"</b> below to play, or tap the menu button in the bottom-left corner!`;
-      const welcomeMarkup = {
-        inline_keyboard: [
+      const webAppUrl = process.env.TELEGRAM_WEBAPP_URL || process.env.WEBAPP_URL || process.env.FRONTEND_URL || 'https://bingo-bet-app.onrender.com';
+      const telegramId = String(fromUser.id);
+      const existingUser = authService.getUserByTelegramId(telegramId);
+
+      // If user already exists with an active/completed account, greet and launch directly!
+      if (existingUser && existingUser.registration_status === 'COMPLETED') {
+        const wallet = ledgerService.getWallet(existingUser.id);
+        const welcomeBackText = `👋 <b>እንኳን ደህና መጡ ${existingUser.username || fromUser.first_name}! (Welcome Back!)</b>\n\n` +
+          `🇪🇹 <b>BINGO BET</b> - Ethiopia's #1 Live 75-Ball Bingo Betting.\n` +
+          `💰 ቀሪ ሂሳብዎ (Balance): <b>${(wallet?.balance || 0).toFixed(0)} Birr</b>\n\n` +
+          `🎮 ከታች ያለውን <b>🎮 Play BINGO BET</b> በመጫን አሁኑኑ መጫወት ይጀምሩ!`;
+
+        const welcomeMarkup = {
+          inline_keyboard: [
+            [
+              {
+                text: '🎮 Play BINGO BET (Launch Game)',
+                web_app: { url: webAppUrl }
+              }
+            ],
+            [
+              {
+                text: '🌐 Play in Browser (Direct Link)',
+                url: webAppUrl
+              }
+            ]
+          ]
+        };
+
+        if (!isWebhook) {
+          await this.sendMessage(chatId, welcomeBackText, { reply_markup: welcomeMarkup });
+        }
+
+        return {
+          success: true,
+          action: 'sent_welcome_back',
+          webhookResponse: {
+            method: 'sendMessage',
+            chat_id: chatId,
+            text: welcomeBackText,
+            parse_mode: 'HTML',
+            reply_markup: welcomeMarkup
+          }
+        };
+      }
+
+      // First-time user: ask them to share their phone number to authenticate and start playing!
+      const requestPhoneText = `👋 <b>እንኳን ወደ BINGO BET በደህና መጡ!</b> (Welcome to BINGO BET!)\n\n` +
+        `🇪🇹 <b>በኢትዮጵያ ቀዳሚው የቀጥታ ቢንጎ ጨዋታ (Live 75-Ball Bingo)</b>\n\n` +
+        `አካውንቶን ለማረጋገጥ እና መጫወት ለመጀመር እባክዎ ከታች ያለውን <b>📲 Share Phone Number</b> የሚለውን ቁልፍ ይጫኑ።\n\n` +
+        `<i>(Tap the button below to share your phone number to authenticate your account and start playing.)</i>`;
+
+      const replyMarkup = {
+        keyboard: [
           [
             {
-              text: '🎮 Launch BINGO BET (Mini App)',
-              web_app: { url: webAppUrl }
-            }
-          ],
-          [
-            {
-              text: '🌐 Play in Browser (Direct Link)',
-              url: webAppUrl
+              text: '📲 Share Phone Number (ስልክ ቁጥር አጋራ)',
+              request_contact: true
             }
           ]
-        ]
+        ],
+        resize_keyboard: true,
+        one_time_keyboard: true
       };
 
       if (!isWebhook) {
-        await this.sendMessage(chatId, welcomeText, { reply_markup: welcomeMarkup });
+        await this.sendMessage(chatId, requestPhoneText, { reply_markup: replyMarkup });
       }
 
       return {
         success: true,
-        action: 'sent_welcome',
+        action: 'sent_first_time_contact_request',
         webhookResponse: {
           method: 'sendMessage',
           chat_id: chatId,
-          text: welcomeText,
+          text: requestPhoneText,
           parse_mode: 'HTML',
-          reply_markup: welcomeMarkup
+          reply_markup: replyMarkup
         }
       };
     }
@@ -508,18 +554,26 @@ export class TelegramBotService {
           });
         }
 
-        const appUrl = process.env.TELEGRAM_WEBAPP_URL || process.env.WEBAPP_URL || process.env.FRONTEND_URL || 'http://localhost:5173';
-        const verifiedText = `✅ <b>ስልክ ቁጥርዎ በትክክል ተረጋግጧል! (Phone Verified)</b>\n\n🎉 እንኳን ደስ አለዎት! <b>${verifyResult.user.username}</b> አዲስ አካውንትዎ በተሳካ ሁኔታ ተከፍቷል።\n💰 <b>የመጀመሪያ ተቀማጭ 10% ተጨማሪ ቦነስ (እስከ 50 ብር) ያግኙ!</b> አሁኑኑ መጫወት ይጀምሩ!`;
+        const appUrl = process.env.TELEGRAM_WEBAPP_URL || process.env.WEBAPP_URL || process.env.FRONTEND_URL || 'https://bingo-bet-app.onrender.com';
+        const verifiedText = `✅ <b>አካውንትዎ በተሳካ ሁኔታ ተረጋግጧል! (Account Verified & Active)</b>\n\n` +
+          `🎉 እንኳን ደስ አለዎት <b>${verifyResult.user.username}</b>!\n` +
+          `ስልክ ቁጥር: <code>${sharedPhone}</code>\n\n` +
+          `💰 <b>የመነሻ ቦነስ ተጨምሯል!</b> አሁኑኑ ከታች ያለውን <b>🎮 Launch BINGO BET</b> በመጫን መጫወት ይጀምሩ!`;
         const verifiedMarkup = {
           inline_keyboard: [
             [
               {
-                text: '🎮 Launch BINGO BET App',
+                text: '🎮 Launch BINGO BET (Play Now)',
                 web_app: { url: appUrl }
               }
+            ],
+            [
+              {
+                text: '🌐 Open in Browser',
+                url: appUrl
+              }
             ]
-          ],
-          remove_keyboard: true
+          ]
         };
 
         if (!isWebhook) {

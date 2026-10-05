@@ -2535,7 +2535,7 @@ if (process.env.NODE_ENV !== 'test') {
   httpServer.listen(PORT, () => {
     console.log(`🎰 Bingo Multi-Room Server running at http://localhost:${PORT}`);
     if (process.env.TELEGRAM_BOT_TOKEN) {
-      const webAppUrl = process.env.TELEGRAM_WEBAPP_URL || process.env.WEBAPP_URL || process.env.FRONTEND_URL;
+      const webAppUrl = process.env.TELEGRAM_WEBAPP_URL || process.env.WEBAPP_URL || process.env.FRONTEND_URL || 'https://bingo-bet-app.onrender.com';
       const cleanUrl = webAppUrl ? webAppUrl.replace(/\/+$/, '') : '';
       if (cleanUrl) {
         console.log(`[TelegramBot] Configuring menu button for: ${cleanUrl}`);
