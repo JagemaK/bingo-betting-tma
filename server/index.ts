@@ -959,6 +959,27 @@ app.get('/api/room/:roomId/catalog', (req, res) => {
   res.json({ roomId: req.params.roomId, catalog: catalogObj });
 });
 
+// HTTP fallback endpoint to lock/purchase cards in room
+app.post('/api/room/:roomId/lock-cards', authenticateSession, async (req: any, res) => {
+  try {
+    const { roomId } = req.params;
+    const { cardNumbers } = req.body;
+    if (!Array.isArray(cardNumbers) || cardNumbers.length === 0) {
+      return res.status(400).json({ error: 'cardNumbers must be a non-empty array' });
+    }
+    const room = multiRoomManager.getRoom(roomId);
+    if (!room) {
+      return res.status(404).json({ error: 'Room not found' });
+    }
+    const tickets = await room.lockMultipleCards(req.user.playerId, req.user.username, cardNumbers);
+    const updatedUser = ledgerService.getUser(req.user.playerId);
+    const roomState = room.getPublicState();
+    res.json({ success: true, tickets, user: updatedUser, roomState });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // Leaderboard: Top Winners and High-Rollers (Authoritative database-backed)
 app.get('/api/leaderboard', optionalSession, (req: any, res) => {
   try {

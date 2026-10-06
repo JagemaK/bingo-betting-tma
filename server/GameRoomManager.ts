@@ -150,6 +150,14 @@ export class GameRoom {
   public isCountdownActive: boolean = false;
   private lockQueues: Map<string, Promise<void>> = new Map();
 
+  public getMinCardsToStart(): number {
+    if (process.env.MIN_CARDS_TO_START !== undefined) {
+      const parsed = parseInt(process.env.MIN_CARDS_TO_START, 10);
+      if (!isNaN(parsed) && parsed >= 1) return parsed;
+    }
+    return this.config.minCardsToStart ?? 5;
+  }
+
   private async withLock<T>(key: string, action: () => Promise<T> | T): Promise<T> {
     const current = this.lockQueues.get(key) || Promise.resolve();
     let releaseLock = () => {};
@@ -367,7 +375,7 @@ export class GameRoom {
       isCountdownActive: this.isCountdownActive,
       drawIntervalMs: this.config.drawIntervalMs,
       totalCatalogCards: 200,
-      minCardsToStart: 5,
+      minCardsToStart: this.getMinCardsToStart(),
       commitmentHash: this.getCommitmentHash(),
       serverSeedRevealed: this.status === 'finished' ? this.serverSeed : undefined,
       fullShuffledBallsRevealed: this.status === 'finished' ? this.shuffledBalls : undefined,
@@ -413,7 +421,7 @@ export class GameRoom {
       activePlayersCount: Math.max(uniquePlayerIds.size, 1),
       totalCardsSold: this.tickets.size,
       totalCatalogCards: 200,
-      minCardsToStart: 5,
+      minCardsToStart: this.getMinCardsToStart(),
       totalPot: pool.totalPot,
       winnerPayoutAmount: pool.winnerPayoutAmount,
       playerPayoutPool: pool.winnerPayoutAmount,
@@ -449,15 +457,20 @@ export class GameRoom {
       if (this.lobbyTimeRemaining > 0) {
         this.lobbyTimeRemaining--;
         // Broadcast tick to both room subscribers and global
-        this.io.to(`room_${this.config.roomId}`).emit('LOBBY_TICK', {
-          roomId: this.config.roomId,
-          timeRemaining: this.lobbyTimeRemaining,
-          isCountdownActive: this.isCountdownActive,
-          totalCardsSold: this.tickets.size
-        });
+        if (this.io && typeof this.io.to === 'function') {
+          const roomTarget = this.io.to(`room_${this.config.roomId}`);
+          if (roomTarget && typeof roomTarget.emit === 'function') {
+            roomTarget.emit('LOBBY_TICK', {
+              roomId: this.config.roomId,
+              timeRemaining: this.lobbyTimeRemaining,
+              isCountdownActive: this.isCountdownActive,
+              totalCardsSold: this.tickets.size
+            });
+          }
+        }
 
         if (this.lobbyTimeRemaining === 0) {
-          if (this.tickets.size >= 5) {
+          if (this.tickets.size >= this.getMinCardsToStart()) {
             this.transitionToActiveDraw();
           } else {
             if (this.lobbyTimer) clearInterval(this.lobbyTimer);
@@ -666,8 +679,8 @@ export class GameRoom {
       this.tickets.set(ticketId, ticket);
       this.cardToTicketMap.set(cardNumber, ticket);
 
-      // Rule: The game countdown starts after it reaches 5 cards selected, giving 20 seconds waiting time
-      if (this.tickets.size >= 5 && !this.isCountdownActive) {
+      // Rule: The game countdown starts after it reaches minimum cards selected, giving 20 seconds waiting time
+      if (this.tickets.size >= this.getMinCardsToStart() && !this.isCountdownActive) {
         this.startLobbyCountdown();
       } else {
         this.broadcastState();
@@ -726,8 +739,8 @@ export class GameRoom {
       this.tickets.delete(ticket.ticketId);
       this.cardToTicketMap.delete(cardNumber);
 
-      // If cards drop below 5, stop countdown
-      if (this.tickets.size < 5 && this.isCountdownActive) {
+      // If cards drop below minimum, stop countdown
+      if (this.tickets.size < this.getMinCardsToStart() && this.isCountdownActive) {
         if (this.lobbyTimer) clearInterval(this.lobbyTimer);
         this.lobbyTimer = null;
         this.isCountdownActive = false;
@@ -990,6 +1003,10 @@ export class MultiRoomManager {
   }
 
   private initDefaultRooms() {
+    const defaultMin = process.env.MIN_CARDS_TO_START !== undefined
+      ? parseInt(process.env.MIN_CARDS_TO_START, 10) || 1
+      : 1;
+
     const roomConfigs: RoomConfig[] = [
       {
         roomId: 'room_10birr',
@@ -1000,7 +1017,7 @@ export class MultiRoomManager {
         lobbyDuration: 20,
         drawIntervalMs: 3200,
         totalCatalogCards: 200,
-        minCardsToStart: 5,
+        minCardsToStart: defaultMin,
         badge: '🔥 10 BIRR ENTRY'
       },
       {
@@ -1012,7 +1029,7 @@ export class MultiRoomManager {
         lobbyDuration: 22,
         drawIntervalMs: 3200,
         totalCatalogCards: 200,
-        minCardsToStart: 5,
+        minCardsToStart: defaultMin,
         badge: '⭐ 20 BIRR'
       },
       {
@@ -1024,7 +1041,7 @@ export class MultiRoomManager {
         lobbyDuration: 25,
         drawIntervalMs: 3000,
         totalCatalogCards: 200,
-        minCardsToStart: 5,
+        minCardsToStart: defaultMin,
         badge: '💎 50 BIRR POPULAR'
       },
       {
@@ -1036,7 +1053,7 @@ export class MultiRoomManager {
         lobbyDuration: 30,
         drawIntervalMs: 2800,
         totalCatalogCards: 200,
-        minCardsToStart: 5,
+        minCardsToStart: defaultMin,
         badge: '👑 100 BIRR MAX VIP'
       }
     ];

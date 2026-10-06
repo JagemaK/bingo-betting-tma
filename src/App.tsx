@@ -624,6 +624,49 @@ export default function App() {
       return;
     }
 
+    const executeLockViaHttp = async () => {
+      try {
+        const token = auth.sessionToken || localStorage.getItem('bingo_auth_token');
+        const res = await fetch(apiUrl(`/api/room/${activeRoomId}/lock-cards`), {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {})
+          },
+          body: JSON.stringify({ cardNumbers: [cardNumber] })
+        });
+        const data = await res.json();
+        if (data.success) {
+          soundService.playLineChime();
+          telegramSdk.triggerHaptic('success');
+          if (data.user) setUser(data.user);
+          if (data.tickets) {
+            setUserTickets((prev) => {
+              const prevFiltered = prev.filter((t) => !data.tickets.some((nt: any) => nt.cardNumber === t.cardNumber));
+              return [...prevFiltered, ...data.tickets];
+            });
+          }
+          if (data.roomState) {
+            setGameState(data.roomState);
+          }
+          setErrorMessage(null);
+        } else {
+          soundService.playError();
+          setErrorMessage(data.error || 'Failed to select card');
+          setTimeout(() => setErrorMessage(null), 3000);
+        }
+      } catch (err: any) {
+        soundService.playError();
+        setErrorMessage(err.message || 'Connection error');
+        setTimeout(() => setErrorMessage(null), 3000);
+      }
+    };
+
+    if (!socket || !socket.connected) {
+      executeLockViaHttp();
+      return;
+    }
+
     socket.emit('SELECT_CARD_NUMBER', {
       roomId: activeRoomId,
       cardNumber
@@ -632,6 +675,29 @@ export default function App() {
         soundService.playLineChime();
         telegramSdk.triggerHaptic('success');
         if (res.user) setUser(res.user);
+        if (res.ticket) {
+          setUserTickets((prev) => {
+            const exists = prev.some((t) => t.cardNumber === res.ticket.cardNumber);
+            return exists ? prev : [...prev, res.ticket];
+          });
+          setGameState((prev) => {
+            if (!prev) return prev;
+            const updatedTickets = prev.tickets.filter((t) => t.cardNumber !== res.ticket.cardNumber);
+            return {
+              ...prev,
+              totalCardsSold: prev.totalCardsSold + (prev.tickets.some(t => t.cardNumber === res.ticket.cardNumber) ? 0 : 1),
+              tickets: [...updatedTickets, res.ticket],
+              takenCardNumbers: {
+                ...prev.takenCardNumbers,
+                [res.ticket.cardNumber]: {
+                  playerId: res.ticket.playerId,
+                  username: res.ticket.username,
+                  isBot: Boolean(res.ticket.isBot)
+                }
+              }
+            };
+          });
+        }
         setErrorMessage(null);
       } else {
         soundService.playError();
@@ -646,7 +712,7 @@ export default function App() {
       handleOpenSignUp('register');
       return;
     }
-    if (!socket || !gameState || !activeRoomId) return;
+    if (!gameState || !activeRoomId) return;
 
     // Filter out cards already locked by this player
     const alreadyLockedSet = new Set(userTickets.map((t) => t.cardNumber));
@@ -665,6 +731,49 @@ export default function App() {
       return;
     }
 
+    const executeBatchViaHttp = async () => {
+      try {
+        const token = auth.sessionToken || localStorage.getItem('bingo_auth_token');
+        const res = await fetch(apiUrl(`/api/room/${activeRoomId}/lock-cards`), {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {})
+          },
+          body: JSON.stringify({ cardNumbers: uncommittedCards })
+        });
+        const data = await res.json();
+        if (data.success) {
+          soundService.playLineChime();
+          telegramSdk.triggerHaptic('success');
+          if (data.user) setUser(data.user);
+          if (data.tickets) {
+            setUserTickets((prev) => {
+              const prevFiltered = prev.filter((t) => !data.tickets.some((nt: any) => nt.cardNumber === t.cardNumber));
+              return [...prevFiltered, ...data.tickets];
+            });
+          }
+          if (data.roomState) {
+            setGameState(data.roomState);
+          }
+          setErrorMessage(null);
+        } else {
+          soundService.playError();
+          setErrorMessage(data.error || 'Failed to lock cards');
+          setTimeout(() => setErrorMessage(null), 4000);
+        }
+      } catch (err: any) {
+        soundService.playError();
+        setErrorMessage(err.message || 'Connection error');
+        setTimeout(() => setErrorMessage(null), 4000);
+      }
+    };
+
+    if (!socket || !socket.connected) {
+      executeBatchViaHttp();
+      return;
+    }
+
     socket.emit('LOCK_MULTIPLE_CARDS', {
       roomId: activeRoomId,
       cardNumbers: uncommittedCards
@@ -673,11 +782,34 @@ export default function App() {
         soundService.playLineChime();
         telegramSdk.triggerHaptic('success');
         if (res.user) setUser(res.user);
+        if (res.tickets) {
+          setUserTickets((prev) => {
+            const prevFiltered = prev.filter((t) => !res.tickets.some((nt: any) => nt.cardNumber === t.cardNumber));
+            return [...prevFiltered, ...res.tickets];
+          });
+          setGameState((prev) => {
+            if (!prev) return prev;
+            const updatedTickets = prev.tickets.filter((t) => !res.tickets.some((nt: any) => nt.cardNumber === t.cardNumber));
+            const newTaken = { ...prev.takenCardNumbers };
+            res.tickets.forEach((t: any) => {
+              newTaken[t.cardNumber] = {
+                playerId: t.playerId,
+                username: t.username,
+                isBot: Boolean(t.isBot)
+              };
+            });
+            return {
+              ...prev,
+              totalCardsSold: prev.totalCardsSold + res.tickets.length,
+              tickets: [...updatedTickets, ...res.tickets],
+              takenCardNumbers: newTaken
+            };
+          });
+        }
         setErrorMessage(null);
       } else {
-        soundService.playError();
-        setErrorMessage(res.error || 'Failed to lock cards');
-        setTimeout(() => setErrorMessage(null), 4000);
+        // Fallback to HTTP if socket call failed
+        executeBatchViaHttp();
       }
     });
   };
@@ -693,6 +825,18 @@ export default function App() {
         soundService.playClick();
         telegramSdk.triggerHaptic('light');
         if (res.user) setUser(res.user);
+        setUserTickets((prev) => prev.filter((t) => t.cardNumber !== cardNumber));
+        setGameState((prev) => {
+          if (!prev) return prev;
+          const newTaken = { ...prev.takenCardNumbers };
+          delete newTaken[cardNumber];
+          return {
+            ...prev,
+            totalCardsSold: Math.max(0, prev.totalCardsSold - 1),
+            tickets: prev.tickets.filter((t) => t.cardNumber !== cardNumber),
+            takenCardNumbers: newTaken
+          };
+        });
       } else {
         soundService.playError();
         setErrorMessage(res.error || 'Failed to deselect card');
@@ -724,6 +868,12 @@ export default function App() {
         soundService.playLineChime();
         telegramSdk.triggerHaptic('success');
         if (res.user) setUser(res.user);
+        if (res.tickets) {
+          setUserTickets((prev) => {
+            const prevFiltered = prev.filter((t) => !res.tickets.some((nt: any) => nt.cardNumber === t.cardNumber));
+            return [...prevFiltered, ...res.tickets];
+          });
+        }
         setErrorMessage(null);
       } else {
         soundService.playError();

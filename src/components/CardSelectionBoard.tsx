@@ -730,7 +730,7 @@ export const CardSelectionBoard: React.FC<CardSelectionBoardProps> = ({
             ) : selectedCount > 0 ? (
               <>
                 <Check className="w-3.5 h-3.5 sm:w-4 sm:h-4 stroke-[3] shrink-0" />
-                <span>READY ({roomState.totalCardsSold}/5)</span>
+                <span>READY ({roomState.totalCardsSold}{roomState.minCardsToStart ? `/${roomState.minCardsToStart}` : ''})</span>
               </>
             ) : (
               <>
