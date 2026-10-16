@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { setVerifiedPhone } from './testHelpers.js';
 import { createRequire } from 'module';
 import { app, httpServer } from './index.js';
 import { authService } from './AuthService.js';
@@ -232,6 +233,7 @@ describe('Payment Migration and Forensic Verification Test Suite', () => {
     const userBefore = ledgerService.getUser(playerA.playerId)!;
     const startingBalance = userBefore.walletBalance;
     const startingReserved = userBefore.reservedBalance || 0;
+    setVerifiedPhone(playerA.playerId, '0911223344');
 
     const res = await fetch(`${BASE_URL}/api/wallet/withdraw`, {
       method: 'POST',
@@ -528,6 +530,7 @@ describe('Payment Migration and Forensic Verification Test Suite', () => {
   it('K. INSUFFICIENT BALANCE: Withdrawal request exceeding available balance is rejected', async () => {
     const wallet = databaseService.getWallet(playerB.playerId)!;
     const excessiveAmount = wallet.balance + 10000;
+    setVerifiedPhone(playerB.playerId, '0912345678');
 
     const res = await fetch(`${BASE_URL}/api/wallet/withdraw`, {
       method: 'POST',

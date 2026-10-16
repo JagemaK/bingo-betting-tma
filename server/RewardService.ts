@@ -7,6 +7,19 @@ export const BONUS_ALLOWED_PURCHASES = ['BINGO_CARD', 'DAILY_GRAND_JACKPOT_CARD'
 export type BonusAllowedPurchase = typeof BONUS_ALLOWED_PURCHASES[number];
 
 export const REFERRAL_REWARD_AMOUNT = 10.0; // 10.00 ETB per qualified referral
+
+// Anti-farming rules for referral rewards (override via env). A referred player only qualifies after real
+// activity, so cycling small deposits through many SIM-card accounts no longer pays.
+const envNumber = (name: string, fallback: number): number => {
+  const v = Number.parseFloat(process.env[name] || '');
+  return Number.isFinite(v) && v >= 0 ? v : fallback;
+};
+/** Minimum total approved deposits (ETB) of the referred player. */
+export const referralMinDeposit = () => envNumber('REFERRAL_MIN_DEPOSIT_ETB', 100);
+/** Minimum game cards the referred player must have bought. */
+export const referralMinCards = () => envNumber('REFERRAL_MIN_CARDS', 5);
+/** Maximum referral rewards one referrer can collect per rolling 24 hours. */
+export const referralMaxPerDay = () => envNumber('REFERRAL_MAX_REWARDS_PER_DAY', 20);
 export const CARDS_PER_ROOM_REWARD_MILESTONE = 10; // 10 cards per room milestone
 
 export interface RoomRewardConfig {
@@ -939,6 +952,19 @@ export class RewardService {
   // 3. AUTHORITATIVE REFERRAL REWARD (10 ETB PER QUALIFIED DEPOSIT)
   // =========================================================================
 
+  /** Referred players who deposited enough and actually played (see anti-farming rules above). */
+  private getQualifiedReferees(userId: string): Array<{ id: string; username: string }> {
+    return this.db.prepare(`
+      SELECT u.id, u.username
+      FROM users u
+      JOIN deposit_requests dr ON dr.user_id = u.id AND dr.status = 'APPROVED'
+      WHERE u.referred_by = ? AND u.id != ?
+      GROUP BY u.id, u.username
+      HAVING SUM(dr.amount) >= ?
+        AND COALESCE((SELECT SUM(p.cards_purchased) FROM user_room_reward_progress p WHERE p.user_id = u.id), 0) >= ?
+    `).all(userId, userId, referralMinDeposit(), referralMinCards()) as any[];
+  }
+
   public getReferralRewards(userId: string): ReferralRewardStatus {
     const user = this.db.prepare('SELECT referral_code FROM users WHERE id = ?').get(userId) as any;
     const referralCode = user?.referral_code || `BINGO_${userId.slice(-4).toUpperCase()}`;
@@ -952,13 +978,7 @@ export class RewardService {
     const totalInvited = totalInvitedRow ? Number(totalInvitedRow.count) : 0;
 
     // Qualified referees: referred users who have at least ONE approved deposit
-    const qualifiedReferees = this.db.prepare(`
-      SELECT u.id, u.username
-      FROM users u
-      JOIN deposit_requests dr ON dr.user_id = u.id AND dr.status = 'APPROVED'
-      WHERE u.referred_by = ? AND u.id != ?
-      GROUP BY u.id, u.username
-    `).all(userId, userId) as any[];
+    const qualifiedReferees = this.getQualifiedReferees(userId);
 
     // Referees already claimed
     const claimedReferees = this.db.prepare(`
@@ -991,24 +1011,29 @@ export class RewardService {
     bonusBalance: number;
   } {
     // Find unclaimed qualified referees
-    const qualifiedReferees = this.db.prepare(`
-      SELECT u.id, u.username
-      FROM users u
-      JOIN deposit_requests dr ON dr.user_id = u.id AND dr.status = 'APPROVED'
-      WHERE u.referred_by = ? AND u.id != ?
-      GROUP BY u.id, u.username
-    `).all(userId, userId) as any[];
+    const qualifiedReferees = this.getQualifiedReferees(userId);
 
     const claimedReferees = this.db.prepare(`
       SELECT referee_id FROM referral_reward_claims WHERE referrer_id = ?
     `).all(userId) as any[];
     const claimedSet = new Set(claimedReferees.map(r => r.referee_id));
 
-    const unclaimedReferees = qualifiedReferees.filter(r => !claimedSet.has(r.id));
+    const qualifiedUnclaimed = qualifiedReferees.filter(r => !claimedSet.has(r.id));
 
-    if (unclaimedReferees.length === 0) {
-      throw new Error('No unclaimed referral rewards available. Referred players must make a qualifying deposit first.');
+    if (qualifiedUnclaimed.length === 0) {
+      throw new Error(`No unclaimed referral rewards available. Referred players must make a qualifying deposit (at least ${referralMinDeposit()} ETB in total) and play ${referralMinCards()} cards first.`);
     }
+
+    // Daily cap per referrer (rolling 24 hours)
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const claimedToday = Number((this.db.prepare(
+      'SELECT COUNT(*) AS c FROM referral_reward_claims WHERE referrer_id = ? AND claimed_at >= ?'
+    ).get(userId, since) as any)?.c ?? 0);
+    const remainingToday = Math.max(0, Math.floor(referralMaxPerDay()) - claimedToday);
+    if (remainingToday === 0) {
+      throw new Error('Daily referral reward limit reached. Please try again tomorrow.');
+    }
+    const unclaimedReferees = qualifiedUnclaimed.slice(0, remainingToday);
 
     const count = unclaimedReferees.length;
     const totalReward = Number((count * REFERRAL_REWARD_AMOUNT).toFixed(2));

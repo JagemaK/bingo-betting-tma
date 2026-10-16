@@ -227,7 +227,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
       setErrorMsg(numAmount < 10 ? 'Minimum withdrawal is 10 Birr' : 'Insufficient available balance');
       return;
     }
-    if (!withdrawAddress.trim()) {
+    if (!(user?.phone || withdrawAddress).trim()) {
       soundService.playError();
       setErrorMsg('Please enter your Telebirr phone number (09... or 07...)');
       return;
@@ -247,8 +247,8 @@ export const WalletModal: React.FC<WalletModalProps> = ({
         body: JSON.stringify({
           playerId: user.playerId,
           amount: numAmount,
-          address: withdrawAddress.trim(),
-          withdrawAddress: withdrawAddress.trim()
+          address: (user?.phone || withdrawAddress).trim(),
+          withdrawAddress: (user?.phone || withdrawAddress).trim()
         })
       });
       const data = await res.json();
@@ -645,11 +645,15 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                 <Phone className="w-4 h-4 text-[#E8FF00]" />
                 <input
                   type="tel"
-                  value={withdrawAddress}
+                  value={user?.phone || withdrawAddress}
+                  readOnly={Boolean(user?.phone)}
                   onChange={(e) => setWithdrawAddress(e.target.value)}
                   placeholder="09xxxxxxxx or 07xxxxxxxx"
                   className="bg-transparent font-arcade text-xs text-white outline-none w-full"
                 />
+              </div>
+              <div className="text-[10px] text-white/50">
+                For your security, payouts go only to your verified number. Contact support to change it.
               </div>
             </div>
 

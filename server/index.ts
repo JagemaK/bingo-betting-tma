@@ -12,7 +12,7 @@ import { computeCommitmentHash } from './BingoEngine.js';
 import { databaseService } from './DatabaseService.js';
 import { dailyJackpotService } from './DailyJackpotService.js';
 import { hashPassword, verifyPassword } from './PasswordUtils.js';
-import { formatLocalPhone, isValidEthiopianPhone } from './PhoneUtils.js';
+import { formatLocalPhone, isValidEthiopianPhone, maskPhone } from './PhoneUtils.js';
 import crypto from 'crypto';
 import { leaderboardService } from './LeaderboardService.js';
 import { authEndpointRateLimitMiddleware } from './RateLimiter.js';
@@ -346,6 +346,21 @@ const requireAdmin = (req: any, res: any, next: any) => {
     }
     next();
   });
+};
+
+// SECURITY: An agent may only approve/reject deposits assigned to them. A deposit is assigned automatically to the
+// agent who holds the receiving payment account (or reassigned by a Super Admin), i.e. the only agent who can see
+// whether the money actually arrived. Without this, any agent could approve fake deposits for an accomplice.
+const agentMayProcessDeposit = (req: any, res: any): boolean => {
+  if (req.user?.role !== 'AGENT') return true;
+  const deposit = databaseService.getDepositRequest(req.params.id);
+  if (!deposit) return true; // let the ledger return its normal "not found" error
+  const agentId = req.user.playerId || req.user.id;
+  if (deposit.assigned_agent_id !== agentId) {
+    res.status(403).json({ error: 'This deposit is assigned to another payment account holder. Only the assigned agent or a Super Admin can process it.' });
+    return false;
+  }
+  return true;
 };
 
 const optionalSession = (req: any, res: any, next: any) => {
@@ -820,6 +835,18 @@ app.post('/api/wallet/withdraw', authenticateSession, async (req: any, res) => {
     }
     if (userObj.registration_status === 'PENDING') {
       return res.status(403).json({ success: false, error: 'Please complete phone verification before requesting a withdrawal' });
+    }
+
+    // SECURITY: Payouts only go to the account's own verified phone, so a hijacked session cannot redirect funds
+    const verifiedPhone = databaseService.getUserById(targetPlayerId)?.phone;
+    if (!verifiedPhone) {
+      return res.status(403).json({ success: false, error: 'Please verify your phone number before requesting a withdrawal' });
+    }
+    if (normalizedPhone !== verifiedPhone) {
+      return res.status(400).json({
+        success: false,
+        error: `Withdrawals can only be sent to your verified Telebirr number (${formatLocalPhone(verifiedPhone) || verifiedPhone}). Contact support to change it.`
+      });
     }
 
     // Balance is atomically reserved and held; status is PENDING
@@ -1484,6 +1511,7 @@ app.get('/api/staff/deposits', requireStaff, (req: any, res) => {
 });
 
 app.post('/api/staff/deposits/:id/approve', requireStaff, async (req: any, res) => {
+  if (!agentMayProcessDeposit(req, res)) return;
   try {
     const actorId = req.user.playerId || req.user.id;
     const result = await ledgerService.approveDeposit(actorId, req.params.id);
@@ -1541,6 +1569,7 @@ app.post('/api/staff/deposits/:id/approve', requireStaff, async (req: any, res) 
 });
 
 app.post('/api/staff/deposits/:id/reject', requireStaff, (req: any, res) => {
+  if (!agentMayProcessDeposit(req, res)) return;
   const { reason } = req.body;
   try {
     const actorId = req.user.playerId || req.user.id;
@@ -1581,6 +1610,10 @@ app.post('/api/staff/deposits/:id/reject', requireStaff, (req: any, res) => {
 });
 
 app.post('/api/staff/deposits/:id/assign', requireStaff, (req: any, res) => {
+  // Agents cannot (re)assign deposits, otherwise they could claim one and approve it
+  if (req.user?.role === 'AGENT') {
+    return res.status(403).json({ error: 'Only a Super Admin can assign deposits to an agent.' });
+  }
   try {
     const actorId = req.user.playerId || req.user.id;
     const targetAgentId = req.body.agentId || req.body.agent_id || actorId;
@@ -1742,6 +1775,10 @@ app.post('/api/staff/withdrawals/:id/assign', requireStaff, (req: any, res) => {
   }
 });
 
+// Agents see masked customer phone numbers in the customer directory (they get the full number only on the
+// deposit/withdrawal requests they process, where it's needed to verify or send a payment). Super Admins see all.
+const phoneForViewer = (req: any, phone?: string | null) => (req.user?.role === 'AGENT' ? maskPhone(phone) : phone);
+
 app.get('/api/staff/customers', requireStaff, (req: any, res) => {
   try {
     const search = (req.query.search || req.query.query) as string;
@@ -1753,7 +1790,7 @@ app.get('/api/staff/customers', requireStaff, (req: any, res) => {
         return {
           id: u.id,
           username: u.username,
-          phone: u.phone,
+          phone: phoneForViewer(req, u.phone),
           account_status: u.account_status,
           created_at: u.created_at,
           last_activity: stats.last_activity,
@@ -1782,12 +1819,14 @@ app.get('/api/staff/customers/:id', requireStaff, (req: any, res) => {
       action: 'CUSTOMER_LOOKUP',
       target_user_id: req.params.id
     });
+    const maskedPhone = phoneForViewer(req, detail.user.phone);
+    detail.user = { ...detail.user, phone: maskedPhone };
     res.json({
       success: true,
       customer: {
         id: detail.user.id,
         username: detail.user.username,
-        phone: detail.user.phone,
+        phone: maskedPhone,
         account_status: detail.user.account_status,
         created_at: detail.user.created_at,
         balance: detail.user.balance,

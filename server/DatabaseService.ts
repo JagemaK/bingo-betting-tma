@@ -3436,9 +3436,11 @@ export class DatabaseService {
       SELECT * FROM ledger_transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT 20
     `).all(userId);
 
+    // SECURITY: never hand password hashes/salts to staff dashboards
+    const { password_hash: _hash, password_salt: _salt, ...safeUser } = user as any;
     return {
       user: {
-        ...user,
+        ...safeUser,
         balance: wallet.balance,
         reserved_balance: wallet.reserved_balance,
         bonus_balance: wallet.bonus_balance || 0,

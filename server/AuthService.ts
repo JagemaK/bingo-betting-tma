@@ -166,6 +166,12 @@ export function clearInitDataReplayCache(): void {
   initDataReplayCache.clear();
 }
 
+/** A user row without password hash/salt, safe to return to dashboards. */
+function withoutSecrets<T extends Record<string, any>>(row: T): Omit<T, 'password_hash' | 'password_salt'> {
+  const { password_hash: _hash, password_salt: _salt, ...rest } = row;
+  return rest;
+}
+
 /** Constant-time comparison of two optional secrets; false if either is missing. */
 function safeEqual(a?: string, b?: string): boolean {
   if (!a || !b) return false;
@@ -973,7 +979,7 @@ export class AuthService {
 
     const w = this.databaseService.getOrCreateWallet(updated.id);
     return {
-      ...updated,
+      ...withoutSecrets(updated),
       playerId: updated.id,
       walletBalance: w.balance
     };
@@ -1036,7 +1042,7 @@ export class AuthService {
 
     const w = this.databaseService.getOrCreateWallet(updated.id);
     return {
-      ...updated,
+      ...withoutSecrets(updated),
       playerId: updated.id,
       walletBalance: w.balance
     };

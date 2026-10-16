@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { setVerifiedPhone } from './testHelpers.js';
 import { app, httpServer } from './index.js';
 import { authService } from './AuthService.js';
 import { ledgerService } from './LedgerService.js';
@@ -255,6 +256,7 @@ describe('Security and Telebirr-Only Audit Suite', () => {
     it('prevents race-condition over-withdrawal beyond available balance', async () => {
       // Ensure user has exactly 200 ETB available
       databaseService.updateWalletBalance(userB.id, 200, 0);
+      setVerifiedPhone(userB.id, '0911223344');
       const startBalance = databaseService.getWallet(userB.id)?.balance;
       expect(startBalance).toBe(200);
 
@@ -299,6 +301,7 @@ describe('Security and Telebirr-Only Audit Suite', () => {
     it('prevents double finalization when two admin withdrawal approvals run concurrently', async () => {
       // Give user A balance and create a withdrawal request
       databaseService.updateWalletBalance(userA.id, 500, 0);
+      setVerifiedPhone(userA.id, '0912345678');
       const wthRes = await fetch(`${BASE_URL}/api/wallet/withdraw`, {
         method: 'POST',
         headers: {
@@ -389,6 +392,7 @@ describe('Security and Telebirr-Only Audit Suite', () => {
     });
 
     it('accepts valid Telebirr phone format (09xxxxxxxx or 07xxxxxxxx)', async () => {
+      setVerifiedPhone(userA.id, '0912345678');
       const res = await fetch(`${BASE_URL}/api/wallet/withdraw`, {
         method: 'POST',
         headers: {

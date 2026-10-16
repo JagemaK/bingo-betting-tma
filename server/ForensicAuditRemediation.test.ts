@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { relaxReferralRules } from './testHelpers.js';
 import { httpServer } from './index.js';
 import { databaseService } from './DatabaseService.js';
 import { ledgerService } from './LedgerService.js';
@@ -70,6 +71,9 @@ describe('Forensic Audit & Remediation Regression Suite', () => {
   });
 
   describe('2. Referral Claim Hardening & Infinite Money Prevention', () => {
+    let restoreReferralRules: () => void;
+    beforeAll(() => { restoreReferralRules = relaxReferralRules(); });
+    afterAll(() => restoreReferralRules());
     it('rejects unauthenticated requests to /api/referral/claim with 401', async () => {
       const res = await fetch(`${BASE_URL}/api/referral/claim`, {
         method: 'POST',

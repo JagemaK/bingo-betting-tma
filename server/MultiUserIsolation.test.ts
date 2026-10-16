@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { setVerifiedPhone } from './testHelpers.js';
 import { io as ClientSocket, Socket as ClientSocketType } from 'socket.io-client';
 import { httpServer, app, multiRoomManager } from './index.js';
 import { authService } from './AuthService.js';
@@ -389,6 +390,7 @@ describe('Multi-User Security & Player Isolation Test Suite (Requirements 17 & 1
   it('TEST 12: Two simultaneous withdrawals cannot double-spend available balance', async () => {
     // Set user A's balance to exactly 100 ETB, with 0 reserved
     databaseService.updateWalletBalance(userA.playerId, 100);
+    setVerifiedPhone(userA.playerId, '0911001122');
 
     // Fire two simultaneous withdrawal requests for 100 ETB each
     const [w1, w2] = await Promise.all([

@@ -41,7 +41,7 @@ The current setup is **backend on Render** (`render.yaml`) and **frontend on Ver
 
    `GET /api/health` shows `database.redisBackup.enabled` or `database.persistentPathConfigured`.
 2. **Environment variables** on Render (see the table below). `JACKPOT_SERVER_SECRET` is mandatory: the server refuses to start in production without it (the blueprint generates one).
-3. **Configure the real Telebirr deposit account** in Super Admin → Payment Accounts. Until you do, customers see "Deposits are temporarily unavailable", and `/api/health` shows `payments.depositAccountConfigured: false`.
+3. **Configure the real Telebirr deposit account** in Super Admin → Payment Accounts, and **assign it to the agent who holds that phone**. Until you configure one, customers see "Deposits are temporarily unavailable", and `/api/health` shows `payments.depositAccountConfigured: false`. Deposits are routed to the agent who holds the receiving account; agents can only approve or reject deposits assigned to them, and only Super Admins can reassign them. Deposits to an account with no agent go to the Super Admins.
 4. **Super admins.** Put the admins' numeric Telegram IDs in `SUPER_ADMIN_TELEGRAM_IDS`. Admins can then promote agents from the dashboard.
 5. **Bot webhook.** Set `TELEGRAM_WEBHOOK_SECRET`. On boot the server registers `https://<RENDER_EXTERNAL_URL>/api/telegram/webhook` with Telegram, which also wakes a sleeping instance. Without it, the bot falls back to polling and stops answering while the instance sleeps. `/api/health` shows `telegram.mode`.
 6. **Bot menu & Mini App URL.** Set `FRONTEND_URL` to the deployed frontend URL. Optionally run `node scripts/setup-bot.js` once to set the bot's commands and descriptions.
@@ -66,6 +66,9 @@ The current setup is **backend on Render** (`render.yaml`) and **frontend on Ver
 | `TRUST_PROXY` | optional | Proxy hops to trust for client IPs (default `1` in production) |
 | `AUTH_RATE_LIMIT_PER_MINUTE` | optional | Auth requests per minute per IP (default 15); raise it if many testers share one network |
 | `MIN_CARDS_TO_START` | optional | Cards needed before a room's countdown starts |
+| `REFERRAL_MIN_DEPOSIT_ETB` | optional | Total approved deposits a referred player needs before the referrer earns a reward (default 100) |
+| `REFERRAL_MIN_CARDS` | optional | Game cards a referred player must buy before qualifying (default 5) |
+| `REFERRAL_MAX_REWARDS_PER_DAY` | optional | Max referral rewards per referrer per rolling 24 hours (default 20) |
 | `VITE_BACKEND_URL` | frontend build | Backend URL baked into the frontend build (defaults to the Render URL) |
 
 ### 🧰 Redis backup

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { setVerifiedPhone } from './testHelpers.js';
 import { httpServer } from './index.js';
 import { databaseService } from './DatabaseService.js';
 import { ledgerService } from './LedgerService.js';
@@ -230,7 +231,8 @@ describe('FINAL END-TO-END SYSTEM VALIDATION', () => {
       wallet = databaseService.getOrCreateWallet(userId);
       expect(wallet.balance).toBe(200.00); // Balance completely unchanged
 
-      // 5. Withdrawal request: withdraw 50 ETB
+      // 5. Withdrawal request: withdraw 50 ETB (to the account's verified phone)
+      setVerifiedPhone(userId, '0911223344');
       const withRes = await fetch(`${BASE_URL}/api/wallet/withdraw`, {
         method: 'POST',
         headers: {
@@ -529,6 +531,7 @@ describe('FINAL END-TO-END SYSTEM VALIDATION', () => {
       ledgerService.getOrCreateUser(richUser, 'RichUser', undefined, 'USER', 0);
       databaseService.updateWalletBalance(richUser, 100);
       const session = databaseService.createSession(richUser, 'tg_rich');
+      setVerifiedPhone(richUser, '0911001122');
 
       // Attempt two concurrent withdrawals of 70 ETB against 100 ETB total balance
       const [res1, res2] = await Promise.all([
