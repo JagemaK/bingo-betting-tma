@@ -802,6 +802,17 @@ export class TelegramBotService {
   /**
    * Send message via Telegram Bot API
    */
+  /**
+   * Send a plain-text notice to a user's private chat with the bot (e.g. "deposit approved"), so it reaches
+   * them even when the Mini App is closed. Only users linked to a numeric Telegram ID can be messaged.
+   */
+  public async notifyUser(userId: string, text: string): Promise<void> {
+    const telegramId = authService.getUserById(userId)?.telegram_id;
+    if (!telegramId || !/^\d+$/.test(String(telegramId))) return;
+    const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    await this.sendMessage(telegramId, `💰 ${escaped}`);
+  }
+
   private async sendMessage(chatId: number | string, text: string, options: any = {}): Promise<void> {
     if (!this.botToken) {
       console.log(`[TelegramBot Mock] To: ${chatId} | Message: ${text.replace(/<[^>]*>/g, '')}`);

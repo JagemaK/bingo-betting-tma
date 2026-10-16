@@ -123,6 +123,18 @@ const io = new Server(httpServer, {
 });
 
 const multiRoomManager = new MultiRoomManager(io);
+
+// Push a wallet result (deposit approved/rejected, withdrawal paid/refunded, adjustment) to the user's open
+// app sessions, and as a Telegram message from the bot so it reaches them even if the Mini App is closed
+// or was suspended while they were paying in Telebirr.
+const emitWalletEvent = (userId: string, event: 'WALLET_UPDATED' | 'DEPOSIT_REJECTED', payload: Record<string, any>) => {
+  io.to(`user_${userId}`).emit(event, payload);
+  if (typeof payload.message === 'string' && payload.message) {
+    telegramBotService.notifyUser(userId, payload.message).catch((err) => {
+      console.warn('[Wallet] Telegram notification failed:', err?.message || err);
+    });
+  }
+};
 // No-op unless start.ts connected to Redis (REDIS_URL)
 startRedisBackups(databaseService.getDb());
 telegramBotService.setSocketServer(io);
@@ -1244,7 +1256,7 @@ app.post('/api/admin/deposits/:id/approve', requireAdmin, async (req: any, res) 
     }
 
     // Instant real-time push to Customer's active WebSocket room
-    io.to(`user_${targetUserId}`).emit('WALLET_UPDATED', {
+    emitWalletEvent(targetUserId, 'WALLET_UPDATED', {
       playerId: targetUserId,
       balance: wallet.balance,
       reservedBalance: wallet.reserved_balance,
@@ -1278,7 +1290,7 @@ app.post('/api/admin/deposits/:id/reject', requireAdmin, (req: any, res) => {
     const targetUserId = deposit.playerId;
 
     // Notify customer of rejected deposit
-    io.to(`user_${targetUserId}`).emit('DEPOSIT_REJECTED', {
+    emitWalletEvent(targetUserId, 'DEPOSIT_REJECTED', {
       playerId: targetUserId,
       depositId: deposit.id,
       amount: deposit.amount,
@@ -1307,7 +1319,7 @@ app.post('/api/admin/withdrawals/:id/approve', requireAdmin, async (req: any, re
     const wallet = databaseService.getOrCreateWallet(targetUserId);
 
     // Instant real-time push to Customer's active WebSocket room
-    io.to(`user_${targetUserId}`).emit('WALLET_UPDATED', {
+    emitWalletEvent(targetUserId, 'WALLET_UPDATED', {
       playerId: targetUserId,
       balance: wallet.balance,
       reservedBalance: wallet.reserved_balance,
@@ -1334,7 +1346,7 @@ app.post('/api/admin/withdrawals/:id/reject', requireAdmin, (req: any, res) => {
     const wallet = databaseService.getOrCreateWallet(targetUserId);
 
     // Instant real-time push of refunded balance to Customer's active WebSocket room
-    io.to(`user_${targetUserId}`).emit('WALLET_UPDATED', {
+    emitWalletEvent(targetUserId, 'WALLET_UPDATED', {
       playerId: targetUserId,
       balance: wallet.balance,
       reservedBalance: wallet.reserved_balance,
@@ -1367,7 +1379,7 @@ app.post('/api/admin/balance-adjustment', requireAdmin, async (req: any, res) =>
     const wallet = databaseService.getOrCreateWallet(targetPlayerId);
 
     // Instant real-time push of adjusted balance to Customer
-    io.to(`user_${targetPlayerId}`).emit('WALLET_UPDATED', {
+    emitWalletEvent(targetPlayerId, 'WALLET_UPDATED', {
       playerId: targetPlayerId,
       balance: wallet.balance,
       reservedBalance: wallet.reserved_balance,
@@ -1533,7 +1545,7 @@ app.post('/api/staff/deposits/:id/approve', requireStaff, async (req: any, res) 
       message += ` You received a 10% First Deposit Bonus of ${result.promotionalBonus.bonusAmount.toFixed(2)} ETB (valid 24h for Bingo)!`;
     }
 
-    io.to(`user_${targetUserId}`).emit('WALLET_UPDATED', {
+    emitWalletEvent(targetUserId, 'WALLET_UPDATED', {
       playerId: targetUserId,
       balance: wallet.balance,
       reservedBalance: wallet.reserved_balance,
@@ -1586,7 +1598,7 @@ app.post('/api/staff/deposits/:id/reject', requireStaff, (req: any, res) => {
       metadata: { amount: deposit.amount, reason }
     });
 
-    io.to(`user_${targetUserId}`).emit('DEPOSIT_REJECTED', {
+    emitWalletEvent(targetUserId, 'DEPOSIT_REJECTED', {
       playerId: targetUserId,
       depositId: deposit.id,
       amount: deposit.amount,
@@ -1678,7 +1690,7 @@ app.post('/api/staff/withdrawals/:id/approve', requireStaff, async (req: any, re
       metadata: { amount: result.withdrawal.amount, address: result.withdrawal.address }
     });
 
-    io.to(`user_${targetUserId}`).emit('WALLET_UPDATED', {
+    emitWalletEvent(targetUserId, 'WALLET_UPDATED', {
       playerId: targetUserId,
       balance: wallet.balance,
       reservedBalance: wallet.reserved_balance,
@@ -1723,7 +1735,7 @@ app.post('/api/staff/withdrawals/:id/reject', requireStaff, (req: any, res) => {
       metadata: { amount: withdrawal.amount, reason }
     });
 
-    io.to(`user_${targetUserId}`).emit('WALLET_UPDATED', {
+    emitWalletEvent(targetUserId, 'WALLET_UPDATED', {
       playerId: targetUserId,
       balance: wallet.balance,
       reservedBalance: wallet.reserved_balance,
@@ -2196,7 +2208,7 @@ app.post('/api/super-admin/balance-adjustment', requireSuperAdmin, async (req: a
       metadata: { amount, reason }
     });
 
-    io.to(`user_${targetPlayerId}`).emit('WALLET_UPDATED', {
+    emitWalletEvent(targetPlayerId, 'WALLET_UPDATED', {
       playerId: targetPlayerId,
       balance: wallet.balance,
       reservedBalance: wallet.reserved_balance,
@@ -2625,7 +2637,7 @@ if (process.env.NODE_ENV !== 'test') {
   process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 }
 
-export { app, httpServer, multiRoomManager, gracefulShutdown };
+export { app, httpServer, io, multiRoomManager, gracefulShutdown };
 
 if (process.env.NODE_ENV !== 'test') {
   const PORT = process.env.PORT || 3001;

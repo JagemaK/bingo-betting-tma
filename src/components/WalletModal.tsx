@@ -46,6 +46,8 @@ interface WalletModalProps {
   onOpenSignUp?: () => void;
   onOpenLogin?: () => void;
   socket?: any;
+  /** Called after a deposit/withdrawal request is accepted, so the app can watch for the agent's decision */
+  onRequestSubmitted?: () => void;
 }
 
 export const WalletModal: React.FC<WalletModalProps> = ({
@@ -54,6 +56,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
   onClose,
   user,
   onUpdateUser,
+  onRequestSubmitted,
   socket,
 }) => {
   const [activeTab, setActiveTab] = useState<'deposit' | 'withdraw' | 'history'>(initialTab);
@@ -202,6 +205,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
         if (data.user) {
           onUpdateUser(data.user);
         }
+        onRequestSubmitted?.();
         soundService.playLineChime();
         telegramSdk.triggerHaptic('success');
         setSuccessMsg(`Deposit request of ${numAmount.toLocaleString()} Birr submitted via Telebirr! Pending admin verification.`);
@@ -256,6 +260,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
         if (data.user) {
           onUpdateUser(data.user);
         }
+        onRequestSubmitted?.();
         soundService.playLineChime();
         telegramSdk.triggerHaptic('success');
         setSuccessMsg(`Withdrawal request of ${numAmount.toLocaleString()} Birr submitted for Telebirr payout! Balance reserved pending review.`);

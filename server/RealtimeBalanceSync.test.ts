@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { io as ClientSocket, Socket as ClientSocketType } from 'socket.io-client';
 import { app, httpServer } from './index.js';
 import { authService } from './AuthService.js';
 import { databaseService } from './DatabaseService.js';
+import { telegramBotService } from './TelegramBotService.js';
 
 let BASE_URL: string;
 let adminToken: string;
@@ -190,5 +191,26 @@ describe('Real-Time Balance Synchronization via Socket.io Test Suite', () => {
     expect(adjPayload.playerId).toBe(playerUser.playerId);
     expect(adjPayload.type).toBe('ADMIN_ADJUSTMENT');
     expect(adjPayload.amount).toBe(50);
+  });
+
+  it('4. Approval is also sent as a Telegram message, so it reaches users whose app is closed or suspended', async () => {
+    const notifySpy = vi.spyOn(telegramBotService, 'notifyUser').mockResolvedValue();
+    try {
+      const depRes = await fetch(`${BASE_URL}/api/wallet/deposit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${userToken}` },
+        body: JSON.stringify({ amount: 120, paymentMethod: 'Telebirr', referenceId: `REF_TG_${Date.now()}` })
+      });
+      const depositId = (await depRes.json()).deposit.id;
+
+      const approveRes = await fetch(`${BASE_URL}/api/admin/deposits/${depositId}/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` }
+      });
+      expect(approveRes.status).toBe(200);
+      expect(notifySpy).toHaveBeenCalledWith(playerUser.playerId, expect.stringMatching(/120 ETB has been approved/));
+    } finally {
+      notifySpy.mockRestore();
+    }
   });
 });

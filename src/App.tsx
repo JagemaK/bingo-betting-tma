@@ -85,6 +85,8 @@ export default function App() {
   const [claimingTicketId, setClaimingTicketId] = useState<string | null>(null);
   const [recentWinAnnouncement, setRecentWinAnnouncement] = useState<WinnerRecord | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [walletNotice, setWalletNotice] = useState<{ tone: 'success' | 'error'; text: string } | null>(null);
+  const pendingWalletWatchRef = useRef<{ timer: ReturnType<typeof setInterval>; until: number } | null>(null);
 
   const socketRef = useRef<Socket | null>(null);
   const activeRoomIdRef = useRef<string | null>(activeRoomId);
@@ -107,6 +109,52 @@ export default function App() {
   useEffect(() => {
     userRef.current = user;
   }, [user]);
+
+  // Re-read the wallet from the server. Socket pushes sent while the Mini App was suspended (e.g. while the
+  // user switched to Telebirr to pay) are never replayed, so we also refresh on reconnect, when the app
+  // comes back to the foreground, and periodically while a deposit/withdrawal is waiting for an agent.
+  const refreshUserBalance = useCallback(async () => {
+    const token = localStorage.getItem('bingo_auth_token');
+    if (!token || !userRef.current) return;
+    try {
+      const res = await fetch(apiUrl('/api/user'), { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.user) setUser((prev) => (prev ? { ...prev, ...data.user } : data.user));
+    } catch {
+      // offline; the next trigger retries
+    }
+  }, []);
+
+  const stopPendingWalletWatch = useCallback(() => {
+    if (pendingWalletWatchRef.current) {
+      clearInterval(pendingWalletWatchRef.current.timer);
+      pendingWalletWatchRef.current = null;
+    }
+  }, []);
+
+  // Fallback while a request is pending: poll every 10s for up to 30 minutes, stopping once the server pushes
+  // the result (WALLET_UPDATED / DEPOSIT_REJECTED).
+  const startPendingWalletWatch = useCallback(() => {
+    stopPendingWalletWatch();
+    const until = Date.now() + 30 * 60 * 1000;
+    const timer = setInterval(() => {
+      if (Date.now() > until) {
+        stopPendingWalletWatch();
+        return;
+      }
+      if (document.visibilityState === 'visible') refreshUserBalance();
+    }, 10000);
+    pendingWalletWatchRef.current = { timer, until };
+  }, [refreshUserBalance, stopPendingWalletWatch]);
+
+  useEffect(() => stopPendingWalletWatch, [stopPendingWalletWatch]);
+
+  useEffect(() => {
+    if (!walletNotice) return;
+    const t = setTimeout(() => setWalletNotice(null), 8000);
+    return () => clearTimeout(t);
+  }, [walletNotice]);
 
   // Synchronize authenticated user from centralized AuthContext
   useEffect(() => {
@@ -287,6 +335,8 @@ export default function App() {
       if (activeRoomIdRef.current) {
         s.emit('JOIN_ROOM', { roomId: activeRoomIdRef.current });
       }
+      // Catch up on anything pushed while we were disconnected (e.g. a deposit approved meanwhile)
+      refreshUserBalance();
     });
 
     s.on('LOBBY_OVERVIEW', (summaries: RoomSummary[]) => {
@@ -355,18 +405,35 @@ export default function App() {
     });
 
     // Real-time server push on deposit approvals, withdrawals, and balance updates
-    s.on('WALLET_UPDATED', (data: { playerId: string; balance: number; reservedBalance?: number; type: string; amount: number; message?: string }) => {
+    s.on('WALLET_UPDATED', (data: { playerId: string; balance: number; reservedBalance?: number; bonusBalance?: number; totalPlayableBalance?: number; type: string; amount: number; message?: string }) => {
       const current = userRef.current;
       if (current && (data.playerId === current.playerId || data.playerId === current.id)) {
-        setUser((prev) => prev ? { ...prev, walletBalance: data.balance } : null);
+        // The header shows totalPlayableBalance (cash + bonus), so it must be updated too, not just walletBalance
+        setUser((prev) => {
+          if (!prev) return null;
+          const bonusBalance = data.bonusBalance ?? prev.bonusBalance ?? 0;
+          return {
+            ...prev,
+            walletBalance: data.balance,
+            bonusBalance,
+            totalPlayableBalance: data.totalPlayableBalance ?? Number((data.balance + bonusBalance).toFixed(2)),
+            ...(data.reservedBalance !== undefined ? { reservedBalance: data.reservedBalance } : {})
+          };
+        });
+        if (data.message) setWalletNotice({ tone: 'success', text: data.message });
+        stopPendingWalletWatch();
+        refreshUserBalance();
         soundService.playJackpotFanfare();
         telegramSdk.triggerHaptic('success');
       }
     });
 
-    s.on('DEPOSIT_REJECTED', (data: { playerId: string; message?: string }) => {
+    s.on('DEPOSIT_REJECTED', (data: { playerId: string; message?: string; reason?: string }) => {
       const current = userRef.current;
       if (current && (data.playerId === current.playerId || data.playerId === current.id)) {
+        setWalletNotice({ tone: 'error', text: data.message || data.reason || 'Your deposit request was rejected. Please contact support.' });
+        stopPendingWalletWatch();
+        refreshUserBalance();
         soundService.playError();
         telegramSdk.triggerHaptic('error');
       }
@@ -505,6 +572,26 @@ export default function App() {
       s.disconnect();
     };
   }, []);
+
+  // Coming back to the app (from Telebirr, another chat, a locked screen): reconnect the socket if the
+  // OS suspended it and re-read the wallet, so an approval that happened meanwhile shows up immediately.
+  useEffect(() => {
+    const onForeground = () => {
+      if (document.visibilityState !== 'visible') return;
+      const s = socketRef.current;
+      if (s && !s.connected) s.connect();
+      refreshUserBalance();
+    };
+    document.addEventListener('visibilitychange', onForeground);
+    window.addEventListener('focus', onForeground);
+    const tg = (window as any).Telegram?.WebApp;
+    tg?.onEvent?.('activated', onForeground);
+    return () => {
+      document.removeEventListener('visibilitychange', onForeground);
+      window.removeEventListener('focus', onForeground);
+      tg?.offEvent?.('activated', onForeground);
+    };
+  }, [refreshUserBalance]);
 
   // Sync user tickets
   useEffect(() => {
@@ -1255,6 +1342,26 @@ export default function App() {
         />
       )}
 
+      {/* Wallet result toast (deposit approved, withdrawal paid, …), shown on every screen */}
+      {walletNotice && (
+        <div className="fixed top-3 inset-x-0 z-[100] flex justify-center px-4 pointer-events-none">
+          <div
+            role="status"
+            className={`pointer-events-auto max-w-md w-full p-3 rounded-2xl text-xs flex items-center justify-between gap-2 shadow-xl backdrop-blur-xl border ${
+              walletNotice.tone === 'success'
+                ? 'bg-emerald-950/90 border-emerald-500/50 text-emerald-200'
+                : 'bg-rose-950/90 border-rose-500/50 text-rose-200'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <span aria-hidden>{walletNotice.tone === 'success' ? '✅' : '⚠️'}</span>
+              <span>{walletNotice.text}</span>
+            </div>
+            <button onClick={() => setWalletNotice(null)} className="font-bold px-1.5 py-0.5 opacity-70 hover:opacity-100 cursor-pointer" aria-label="Dismiss">✕</button>
+          </div>
+        </div>
+      )}
+
       {/* Modals Container */}
       <WalletModal
         isOpen={activeModal === 'wallet'}
@@ -1265,6 +1372,7 @@ export default function App() {
         onOpenSignUp={() => handleOpenSignUp('register')}
         onOpenLogin={handleOpenLogin}
         socket={socket}
+        onRequestSubmitted={startPendingWalletWatch}
       />
 
       <AuthModal
