@@ -286,7 +286,9 @@ export class DatabaseService {
       throw new Error(`SECURITY CRITICAL: Test execution attempted to connect to persistent production database: ${customPath}`);
     }
 
-    const dbPath = customPath || (isTest ? ':memory:' : defaultDbPath);
+    // DATABASE_PATH lets production point SQLite at a persistent disk (e.g. a Render disk mounted at /var/data)
+    const envDbPath = process.env.DATABASE_PATH?.trim() ? path.resolve(process.env.DATABASE_PATH.trim()) : '';
+    const dbPath = customPath || (isTest ? ':memory:' : (envDbPath || defaultDbPath));
 
     this.dbPath = dbPath;
     this.isMemory = dbPath === ':memory:';
@@ -297,6 +299,13 @@ export class DatabaseService {
         fs.mkdirSync(dir, { recursive: true });
       }
       console.log(`[DatabaseService] Authoritative database initialized: ${dbPath}`);
+      if (process.env.NODE_ENV === 'production' && !customPath && !envDbPath) {
+        console.warn(
+          '[DatabaseService] WARNING: DATABASE_PATH is not set. The database lives inside the app directory, which is ' +
+          'wiped on every deploy/restart on hosts with ephemeral disks (e.g. Render free plan). ALL balances, users and ' +
+          'ledger history will be lost. Mount a persistent disk and set DATABASE_PATH (e.g. /var/data/bingo.db).'
+        );
+      }
     }
 
     this.db = new DatabaseSync(dbPath);
@@ -766,10 +775,22 @@ export class DatabaseService {
         );
       `);
 
-      // Seed default active payment account if table is empty
+      // Seed a placeholder payment account for development/tests only.
+      // SECURITY: Never in production — customers would be told to send real money to a number nobody owns.
+      // Production deposits stay unavailable until a Super Admin configures the real Telebirr account.
       try {
+        const isProduction = process.env.NODE_ENV === 'production';
+        if (isProduction) {
+          const res = this.db.prepare(`
+            UPDATE payment_accounts SET is_active = 0, updated_at = datetime('now')
+            WHERE id = 'acc_telebirr_primary' AND phone_number = '0912345678' AND is_active = 1
+          `).run();
+          if (res.changes > 0) {
+            console.warn('[DatabaseService] Deactivated placeholder Telebirr account 0912345678. Configure the real deposit account in the Super Admin dashboard.');
+          }
+        }
         const accCount = (this.db.prepare('SELECT count(*) as count FROM payment_accounts').get() as any)?.count || 0;
-        if (accCount === 0) {
+        if (accCount === 0 && !isProduction) {
           this.db.prepare(`
             INSERT INTO payment_accounts (
               id, provider, account_name, phone_number, is_active, instructions, created_at, updated_at

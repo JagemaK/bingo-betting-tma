@@ -71,6 +71,7 @@ export class TelegramBotService {
   private pendingResets: Map<string, { phone: string; requestedAt: number }> = new Map(); // tgUserId -> { phone }
   private isPolling: boolean = false;
   private lastUpdateId: number = 0;
+  private updateMode: 'off' | 'polling' | 'webhook' = 'off';
 
   constructor(io?: SocketIOServer) {
     this.io = io;
@@ -90,17 +91,23 @@ export class TelegramBotService {
     this.botUsername = process.env.TELEGRAM_BOT_USERNAME || this.botUsername;
     if (!this.botToken || this.isPolling) return;
     this.isPolling = true;
+    this.updateMode = 'polling';
     console.log(`[TelegramBot] Started polling for updates on @${this.botUsername}...`);
     this.pollLoop();
   }
 
   public stopPolling() {
     this.isPolling = false;
+    if (this.updateMode === 'polling') this.updateMode = 'off';
   }
 
-  public async setWebhook(webhookUrl: string, secretToken?: string) {
+  public getUpdateMode(): 'off' | 'polling' | 'webhook' {
+    return this.updateMode;
+  }
+
+  public async setWebhook(webhookUrl: string, secretToken?: string): Promise<boolean> {
     this.botToken = process.env.TELEGRAM_BOT_TOKEN || this.botToken;
-    if (!this.botToken) return;
+    if (!this.botToken) return false;
     this.stopPolling();
     try {
       const secret = secretToken || process.env.TELEGRAM_WEBHOOK_SECRET;
@@ -112,9 +119,16 @@ export class TelegramBotService {
         payload.secret_token = secret;
       }
       const data = await this.callTelegramApi('setWebhook', payload);
-      console.log(`[TelegramBot] Webhook successfully set to ${webhookUrl}:`, data);
+      if (data?.ok) {
+        this.updateMode = 'webhook';
+        console.log(`[TelegramBot] Webhook successfully set to ${webhookUrl}`);
+        return true;
+      }
+      console.error('[TelegramBot] Telegram rejected setWebhook:', data);
+      return false;
     } catch (e) {
       console.error('[TelegramBot] Failed to set webhook:', e);
+      return false;
     }
   }
 

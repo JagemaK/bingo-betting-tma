@@ -73,6 +73,14 @@ export const isOriginAllowed = (origin?: string): boolean => {
 
 const app = express();
 
+// Behind a hosting proxy (Render), req.ip is otherwise the proxy's address, so the per-IP auth rate limiter
+// would put every user in one bucket and a handful of logins would lock everyone out. Trust one proxy hop by
+// default in production / on Render; override with TRUST_PROXY (a hop count, "true", or "false").
+const trustProxySetting = process.env.TRUST_PROXY ?? ((process.env.RENDER || process.env.NODE_ENV === 'production') ? '1' : '');
+if (trustProxySetting && trustProxySetting !== 'false') {
+  app.set('trust proxy', /^\d+$/.test(trustProxySetting) ? Number(trustProxySetting) : trustProxySetting === 'true' ? true : trustProxySetting);
+}
+
 const corsOptions: cors.CorsOptions = {
   origin: (origin, callback) => {
     if (isOriginAllowed(origin)) {
@@ -144,7 +152,17 @@ app.get('/api/health', (req, res) => {
     version: '1.0.0',
     database: {
       status: isDbHealthy ? 'connected' : 'error',
-      mode: 'WAL'
+      mode: 'WAL',
+      persistentPathConfigured: Boolean(process.env.DATABASE_PATH?.trim())
+    },
+    payments: {
+      depositAccountConfigured: (() => {
+        try { return Boolean(databaseService.getActivePaymentAccount()); } catch { return false; }
+      })()
+    },
+    telegram: {
+      botConfigured: Boolean(process.env.TELEGRAM_BOT_TOKEN),
+      mode: telegramBotService.getUpdateMode()
     },
     rooms: {
       total: roomSummaries.length,
@@ -684,6 +702,10 @@ app.post('/api/wallet/deposit', authenticateSession, async (req: any, res) => {
     const paymentMethod = req.body.paymentMethod;
     if (paymentMethod && paymentMethod !== 'Telebirr') {
       return res.status(400).json({ error: 'Telebirr is the only supported payment method' });
+    }
+
+    if (!databaseService.getActivePaymentAccount()) {
+      return res.status(503).json({ error: 'Deposits are temporarily unavailable. Please contact support.' });
     }
 
     const rawAmount = typeof amount === 'string' ? parseFloat(amount) : amount;
@@ -1405,16 +1427,8 @@ app.get('/api/payment/active-account', (req, res) => {
   try {
     const account = databaseService.getActivePaymentAccount();
     if (!account) {
-      return res.json({
-        success: true,
-        account: {
-          id: 'acc_telebirr_primary',
-          provider: 'Telebirr',
-          account_name: 'Official Platform Account',
-          phone_number: '0912345678',
-          instructions: 'Send your deposit via Telebirr, then enter your transaction/reference number below.'
-        }
-      });
+      // Never fall back to a made-up number: the client shows "deposits unavailable" instead
+      return res.json({ success: true, account: null });
     }
     res.json({
       success: true,
@@ -2574,12 +2588,31 @@ if (process.env.NODE_ENV !== 'test') {
         console.log(`[TelegramBot] Configuring menu button for: ${cleanUrl}`);
         telegramBotService.setMenuButton(cleanUrl);
       }
-      // Always delete any stale webhook and start polling for 100% reliable local/tunnel dev
-      telegramBotService.deleteWebhook().then(() => {
+      // Production: use a webhook so Telegram wakes a sleeping instance (e.g. Render free plan) and only one
+      // instance receives updates. Needs a public backend URL (TELEGRAM_WEBHOOK_URL, or Render's automatic
+      // RENDER_EXTERNAL_URL) plus TELEGRAM_WEBHOOK_SECRET. Otherwise fall back to polling (local/tunnel dev).
+      const webhookBase = (process.env.TELEGRAM_WEBHOOK_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/+$/, '');
+      const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
+      const startPollingMode = () => telegramBotService.deleteWebhook().then(() => {
         telegramBotService.startPolling();
       }).catch(err => {
         console.error('[TelegramBot] Failed to reset webhook and start polling:', err);
       });
+
+      if (webhookBase && webhookSecret) {
+        const hookUrl = webhookBase.endsWith('/api/telegram/webhook') ? webhookBase : `${webhookBase}/api/telegram/webhook`;
+        telegramBotService.setWebhook(hookUrl, webhookSecret).then((ok) => {
+          if (!ok) {
+            console.warn('[TelegramBot] Webhook registration failed; falling back to polling.');
+            startPollingMode();
+          }
+        });
+      } else {
+        if (process.env.NODE_ENV === 'production') {
+          console.warn('[TelegramBot] TELEGRAM_WEBHOOK_SECRET (and a public URL) not set; using polling. The bot will stop responding while the instance sleeps.');
+        }
+        startPollingMode();
+      }
     }
   });
 }
