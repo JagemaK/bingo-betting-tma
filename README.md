@@ -33,6 +33,8 @@ The local database is `data/bingo.db` (git-ignored). A placeholder Telebirr depo
 
 The current setup is **backend on Render** (`render.yaml`) and **frontend on Vercel** (`vercel.json`). The frontend talks to the Render backend directly (REST + WebSockets). Express can also serve the built SPA itself, so a single Render service is enough if you prefer.
 
+Render auto-deploys every commit to `main` through its GitHub App, so merging a PR is a production deploy.
+
 ### Launch checklist
 
 1. **Persistent database (required before real money).** Render's free plan wipes the disk on every deploy and restart. Pick one:
