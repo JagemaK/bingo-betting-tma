@@ -306,18 +306,17 @@ describe('Phase 4: User Identity, Telegram Integration & Phone Verification Reme
   // ==================================================
   describe('4. REST API Endpoint Security', () => {
     it('executes POST /api/auth/upgrade-guest end-to-end', async () => {
-      // 1. Create a guest user via sync
-      const guestPlayerId = `usr_guest_api_${Date.now()}`;
+      // 1. Create a guest user via sync (server assigns the guest ID)
       const syncRes = await fetch(`${BASE_URL}/api/user/sync`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          playerId: guestPlayerId,
           username: 'GuestApiUser',
           isGuest: true
         })
       });
       expect(syncRes.status).toBe(200);
+      const guestPlayerId = (await syncRes.json()).user.playerId;
 
       // 2. Credit some winnings to guest
       const db = (app as any).locals?.dbService || dbService;

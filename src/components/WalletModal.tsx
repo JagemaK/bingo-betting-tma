@@ -159,7 +159,10 @@ export const WalletModal: React.FC<WalletModalProps> = ({
   const fetchLedger = async () => {
     if (!user?.playerId) return;
     try {
-      const res = await fetch(apiUrl(`/api/ledger/${user.playerId}`));
+      const token = localStorage.getItem('bingo_auth_token');
+      const res = await fetch(apiUrl(`/api/ledger/${user.playerId}`), {
+        headers: token ? { Authorization: `Bearer ${token}` } : {}
+      });
       if (res.ok) {
         const data = await res.json();
         setLedgerEntries(data.entries || []);

@@ -565,23 +565,27 @@ app.post('/api/auth/telegram-login', (req, res) => {
 });
 
 // Sync or fetch Telegram / Web user
+// SECURITY: Authenticated callers only ever receive their own account. Unauthenticated callers can only
+// create a brand-new guest with a server-generated ID; a client-supplied playerId is never looked up,
+// so existing accounts (and their balances) cannot be read or squatted through this endpoint.
 app.post('/api/user/sync', optionalSession, (req: any, res) => {
-  const currentUserId = req.user?.playerId;
-  const targetId = currentUserId || req.body.playerId;
-  if (!targetId) {
-    return res.status(401).json({ error: 'Authentication required' });
+  if (req.user) {
+    const user = ledgerService.getUser(req.user.playerId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    return res.json({ success: true, user });
   }
 
-  const isGuest = !req.user && (req.body.isGuest || !req.body.telegramId);
-  const accountType = isGuest ? 'GUEST' : (req.body.isBot ? 'BOT' : 'REAL');
-
+  const guestId = `usr_guest_${crypto.randomBytes(12).toString('hex')}`;
+  const requestedName = typeof req.body.username === 'string' ? req.body.username.trim().slice(0, 32) : '';
   const user = ledgerService.getOrCreateUser(
-    targetId,
-    req.body.username || (isGuest ? `Guest_${targetId.slice(-4)}` : 'TelegramPlayer'),
-    req.body.avatarUrl,
+    guestId,
+    requestedName || `Guest_${guestId.slice(-4)}`,
+    undefined,
     'USER',
     0.00,
-    accountType
+    'GUEST'
   );
   res.json({ success: true, user });
 });
@@ -633,20 +637,15 @@ app.get('/api/user/profile/:playerId?', optionalSession, (req: any, res) => {
 });
 
 // Fetch user account and balance
-app.get('/api/user/:playerId?', optionalSession, (req: any, res) => {
+app.get('/api/user/:playerId?', authenticateSession, (req: any, res) => {
   const requestedId = req.params.playerId;
-  const currentUserId = req.user?.playerId;
+  const currentUserId = req.user.playerId;
 
-  if (currentUserId && requestedId && requestedId !== currentUserId) {
+  if (requestedId && requestedId !== currentUserId) {
     return res.status(403).json({ error: 'Access denied: Cannot access another user\'s balance' });
   }
 
-  const targetPlayerId = requestedId || currentUserId;
-  if (!targetPlayerId) {
-    return res.status(401).json({ error: 'Authentication required' });
-  }
-
-  const user = ledgerService.getUser(targetPlayerId);
+  const user = ledgerService.getUser(currentUserId);
   if (!user) {
     return res.status(404).json({ error: 'User not found' });
   }
@@ -654,20 +653,15 @@ app.get('/api/user/:playerId?', optionalSession, (req: any, res) => {
 });
 
 // Get user transaction ledger
-app.get('/api/ledger/:playerId?', optionalSession, (req: any, res) => {
+app.get('/api/ledger/:playerId?', authenticateSession, (req: any, res) => {
   const requestedId = req.params.playerId;
-  const currentUserId = req.user?.playerId;
+  const currentUserId = req.user.playerId;
 
-  if (currentUserId && requestedId && requestedId !== currentUserId) {
+  if (requestedId && requestedId !== currentUserId) {
     return res.status(403).json({ error: 'Access denied: Cannot access another user\'s ledger' });
   }
 
-  const targetPlayerId = requestedId || currentUserId;
-  if (!targetPlayerId) {
-    return res.status(401).json({ error: 'Authentication required' });
-  }
-
-  const entries = ledgerService.getLedgerForUser(targetPlayerId);
+  const entries = ledgerService.getLedgerForUser(currentUserId);
   res.json({ entries });
 });
 
