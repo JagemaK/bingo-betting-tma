@@ -325,7 +325,9 @@ export class AuthService {
     return code;
   }
 
-  public isSuperAdminAccount(telegramId?: string | number, telegramUsername?: string, username?: string): boolean {
+  // SECURITY: Only match Telegram-verified identity (telegram username from signed initData / bot updates,
+  // or numeric Telegram ID). Never match the app-level `username`, which users choose freely at registration.
+  public isSuperAdminAccount(telegramId?: string | number, telegramUsername?: string): boolean {
     const designatedUsernames = ['mxt_mdn', 'sammy_erk', 'jagema_kello'];
     const envUsernames = (process.env.SUPER_ADMIN_TELEGRAM_USERNAMES || '')
       .split(',')
@@ -334,10 +336,8 @@ export class AuthService {
     const targetUsernames = new Set([...designatedUsernames, ...envUsernames]);
 
     const cleanTgUsername = telegramUsername ? String(telegramUsername).trim().toLowerCase().replace(/^@/, '') : '';
-    const cleanUsername = username ? String(username).trim().toLowerCase().replace(/^@/, '') : '';
 
     if (cleanTgUsername && targetUsernames.has(cleanTgUsername)) return true;
-    if (cleanUsername && targetUsernames.has(cleanUsername)) return true;
 
     const superAdminIds = (process.env.SUPER_ADMIN_TELEGRAM_IDS || '')
       .split(',')
@@ -348,8 +348,8 @@ export class AuthService {
     return false;
   }
 
-  public determineRole(telegramId?: string | number, telegramUsername?: string, username?: string): UserRole {
-    if (this.isSuperAdminAccount(telegramId, telegramUsername, username)) {
+  public determineRole(telegramId?: string | number, telegramUsername?: string): UserRole {
+    if (this.isSuperAdminAccount(telegramId, telegramUsername)) {
       return 'SUPER_ADMIN';
     }
     const adminIds = (process.env.ADMIN_TELEGRAM_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -483,7 +483,7 @@ export class AuthService {
         if (tgUser.username) updates.telegram_username = tgUser.username;
 
         // Check if super admin or admin
-        if (this.isSuperAdminAccount(telegramId, tgUser.username, existingUser.username)) {
+        if (this.isSuperAdminAccount(telegramId, tgUser.username)) {
           updates.role = 'SUPER_ADMIN';
         } else {
           const adminIds = (process.env.ADMIN_TELEGRAM_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -515,12 +515,12 @@ export class AuthService {
           sessionToken: session.id
         };
       } else {
-        if (process.env.NODE_ENV === 'production' || process.env.AUTO_ACTIVATE_TELEGRAM === 'true' || this.isSuperAdminAccount(telegramId, tgUser.username, existingUser.username)) {
+        if (process.env.NODE_ENV === 'production' || process.env.AUTO_ACTIVATE_TELEGRAM === 'true' || this.isSuperAdminAccount(telegramId, tgUser.username)) {
           const updates: any = {
             registration_status: 'COMPLETED',
             last_login_at: new Date().toISOString()
           };
-          if (this.isSuperAdminAccount(telegramId, tgUser.username, existingUser.username)) {
+          if (this.isSuperAdminAccount(telegramId, tgUser.username)) {
             updates.role = 'SUPER_ADMIN';
           }
           const updated = this.databaseService.updateUser(existingUser.id, updates);
@@ -574,7 +574,7 @@ export class AuthService {
 
       const newReferralCode = this.generateUniqueReferralCode(cleanUsername);
       const newPlayerId = `tg_${telegramId}`;
-      const role: UserRole = this.determineRole(telegramId, tgUser.username, cleanUsername);
+      const role: UserRole = this.determineRole(telegramId, tgUser.username);
 
       const createdUser = this.databaseService.createUser({
         id: newPlayerId,
@@ -715,7 +715,7 @@ export class AuthService {
         const playerId = `tg_${telegramId}`;
 
         // Check if super admin or admin
-        const role: UserRole = this.determineRole(telegramId, telegramUser.username, cleanUsername);
+        const role: UserRole = this.determineRole(telegramId, telegramUser.username);
 
         let userRow: UserRow;
         if (existingTgUser) {
@@ -1250,7 +1250,7 @@ export class AuthService {
       // 1. If pending registration exists from in-memory cache
       if (pending) {
         const referralCode = this.generateUniqueReferralCode(pending.name);
-        const role = this.determineRole(telegramId, telegramUsername, pending.name);
+        const role = this.determineRole(telegramId, telegramUsername);
         const created = this.databaseService.createUser({
           id: playerId,
           telegram_id: String(telegramId),
@@ -1295,7 +1295,7 @@ export class AuthService {
       const dbPending = this.databaseService.getPendingRegistrationByPhone(normalizedPhone);
       if (dbPending && dbPending.status !== 'EXPIRED' && dbPending.status !== 'DENIED') {
         const referralCode = this.generateUniqueReferralCode(dbPending.name);
-        const role = this.determineRole(telegramId, telegramUsername, dbPending.name);
+        const role = this.determineRole(telegramId, telegramUsername);
         const created = this.databaseService.createUser({
           id: playerId,
           telegram_id: String(telegramId),
@@ -1336,7 +1336,7 @@ export class AuthService {
         const updates: any = {};
         if (!user.phone) updates.phone = normalizedPhone;
         if (user.registration_status !== 'COMPLETED') updates.registration_status = 'COMPLETED';
-        if (this.isSuperAdminAccount(telegramId, telegramUsername || user.telegram_username, user.username)) {
+        if (this.isSuperAdminAccount(telegramId, telegramUsername || user.telegram_username)) {
           updates.role = 'SUPER_ADMIN';
         }
         if (Object.keys(updates).length > 0) {
@@ -1362,7 +1362,7 @@ export class AuthService {
         cleanUsername = `${baseName}_${suffix++}`;
       }
       const referralCode = this.generateUniqueReferralCode(cleanUsername);
-      const role = this.determineRole(telegramId, telegramUsername, cleanUsername);
+      const role = this.determineRole(telegramId, telegramUsername);
 
       const created = this.databaseService.createUser({
         id: playerId,

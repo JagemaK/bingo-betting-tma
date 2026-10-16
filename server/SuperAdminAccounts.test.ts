@@ -79,6 +79,33 @@ describe('Super Admin Telegram Accounts Designation & Role Delegation', () => {
     expect(db.getUserById('existing_jagema')?.role).toBe('SUPER_ADMIN');
   });
 
+  it('does not elevate a phone-registered account that picks a designated username', () => {
+    const reg = authService.register('jagema_kello', '0987654321', 'hunter22');
+    expect(reg.success).toBe(true);
+    expect(reg.user?.role).toBe('USER');
+
+    // Simulate the next server boot
+    (db as any).runMigrations();
+    expect(db.getUserById(reg.user!.playerId)?.role).toBe('USER');
+
+    const login = authService.login('0987654321', 'hunter22');
+    expect(login.success).toBe(true);
+    expect(login.user?.role).toBe('USER');
+  });
+
+  it('does not elevate existing users whose app username alone matches a designated name', () => {
+    db.createUser({
+      id: 'impostor_mxt',
+      telegram_id: 'phone_+251911000111',
+      username: '@MXT_MDN',
+      role: 'USER',
+      referral_code: 'REF_IMPOSTOR'
+    });
+
+    (db as any).runMigrations();
+    expect(db.getUserById('impostor_mxt')?.role).toBe('USER');
+  });
+
   it('blocks unverified 1-tap fallback login for designated super admin usernames', () => {
     const res = authService.telegramLogin({
       id: 55443322,
