@@ -199,7 +199,7 @@ export class GameRoom {
     this.tickets.clear();
     this.cardToTicketMap.clear();
     this.winners = [];
-    this.serverSecret = `SECRET_${this.config.roomId}_` + Math.random().toString(36);
+    this.serverSecret = `SECRET_${this.config.roomId}_${crypto.randomBytes(32).toString('hex')}`;
 
     // Pre-generate 200 numbered unique Bingo Cards
     const totalCatalog = this.config.totalCatalogCards || 200;

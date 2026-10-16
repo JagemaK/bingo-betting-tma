@@ -115,6 +115,19 @@ describe('Account takeover regressions (auth & verification flows)', () => {
     expect(poll.data.resetToken).toBeUndefined();
   });
 
+  it('referral stats require a session and are limited to the caller', async () => {
+    const victim = authService.register('Referral Victim', '0933100009', 'ref_victim_pw');
+    const anon = await json('GET', `/api/referral/${victim.user!.playerId}`);
+    expect(anon.status).toBe(401);
+
+    const other = authService.register('Referral Other', '0933100010', 'ref_other_pw');
+    const cross = await json('GET', `/api/referral/${victim.user!.playerId}`, undefined, other.token);
+    expect(cross.status).toBe(403);
+
+    const own = await json('GET', '/api/referral', undefined, victim.token);
+    expect(own.status).toBe(200);
+  });
+
   it('a Telegram display name equal to a designated admin username does not grant Super Admin', async () => {
     await botShare(771100008, '0933100008', null, { first_name: 'mxt_mdn' });
     const user = databaseService.getUserByPhone(authService.normalizePhone('0933100008'));

@@ -1060,18 +1060,15 @@ app.post('/api/rewards/claim', authenticateSession, (req: any, res) => {
 });
 
 // Referral & Affiliate Income (Authoritative 10 ETB per qualified deposit)
-app.get('/api/referral/:playerId?', optionalSession, (req: any, res) => {
-  const currentUserId = req.user?.playerId;
+app.get('/api/referral/:playerId?', authenticateSession, (req: any, res) => {
+  const currentUserId = req.user.playerId;
   const requestedId = req.params.playerId;
 
-  if (currentUserId && requestedId && requestedId !== currentUserId) {
+  if (requestedId && requestedId !== currentUserId) {
     return res.status(403).json({ error: 'Access denied: Cannot access another user\'s referral data' });
   }
 
-  const targetId = requestedId || currentUserId;
-  if (!targetId) {
-    return res.status(401).json({ error: 'Authentication required' });
-  }
+  const targetId = currentUserId;
 
   const refStats = databaseService.rewardService.getReferralRewards(targetId);
   res.json({
