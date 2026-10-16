@@ -35,7 +35,11 @@ The current setup is **backend on Render** (`render.yaml`) and **frontend on Ver
 
 ### Launch checklist
 
-1. **Persistent database (required before real money).** Render's free plan wipes the disk on every deploy and restart, so all users, balances and ledger history are lost. Move the service to a paid plan, uncomment the `disk` block and `DATABASE_PATH` in `render.yaml`, and redeploy. `GET /api/health` shows `database.persistentPathConfigured: true` once it's set up.
+1. **Persistent database (required before real money).** Render's free plan wipes the disk on every deploy and restart. Pick one:
+   - **Redis backup (works on the free plan):** set `REDIS_URL`. See [Redis backup](#-redis-backup) below.
+   - **Persistent disk:** move to a paid plan, uncomment the `disk` block and `DATABASE_PATH` in `render.yaml`, and redeploy.
+
+   `GET /api/health` shows `database.redisBackup.enabled` or `database.persistentPathConfigured`.
 2. **Environment variables** on Render (see the table below). `JACKPOT_SERVER_SECRET` is mandatory: the server refuses to start in production without it (the blueprint generates one).
 3. **Configure the real Telebirr deposit account** in Super Admin → Payment Accounts. Until you do, customers see "Deposits are temporarily unavailable", and `/api/health` shows `payments.depositAccountConfigured: false`.
 4. **Super admins.** Put the admins' numeric Telegram IDs in `SUPER_ADMIN_TELEGRAM_IDS`. Admins can then promote agents from the dashboard.
@@ -48,7 +52,10 @@ The current setup is **backend on Render** (`render.yaml`) and **frontend on Ver
 |---|---|---|
 | `NODE_ENV` | ✅ | `production` on the server |
 | `JACKPOT_SERVER_SECRET` | ✅ (prod) | Daily Jackpot fairness seed; the server won't start without it |
-| `DATABASE_PATH` | ✅ for real money | SQLite file on a persistent disk, e.g. `/var/data/bingo.db` |
+| `DATABASE_PATH` | one of these two for real money | SQLite file on a persistent disk, e.g. `/var/data/bingo.db` |
+| `REDIS_URL` | one of these two for real money | Redis that stores database backups (restored on boot) |
+| `REDIS_BACKUP_INTERVAL_SECONDS` | optional | How often to back up when data changed (default 10) |
+| `REDIS_KEY_PREFIX` | optional | Key prefix (default `bingo:`), to share one Redis between environments |
 | `TELEGRAM_BOT_TOKEN` | ✅ | Bot token from @BotFather; also verifies Mini App logins |
 | `TELEGRAM_BOT_USERNAME` | ✅ | Bot username without `@` |
 | `TELEGRAM_WEBHOOK_SECRET` | recommended | Random `A-Za-z0-9_-` string (e.g. `openssl rand -hex 32`); enables webhook mode |
@@ -60,6 +67,32 @@ The current setup is **backend on Render** (`render.yaml`) and **frontend on Ver
 | `AUTH_RATE_LIMIT_PER_MINUTE` | optional | Auth requests per minute per IP (default 15); raise it if many testers share one network |
 | `MIN_CARDS_TO_START` | optional | Cards needed before a room's countdown starts |
 | `VITE_BACKEND_URL` | frontend build | Backend URL baked into the frontend build (defaults to the Render URL) |
+
+### 🧰 Redis backup
+
+With `REDIS_URL` set, `npm start` (`server/start.ts`):
+
+1. Takes a new **generation** number (`INCR bingo:db:generation`) and, if there's no local database file, restores the latest snapshot from `bingo:db:snapshot` before the server opens the database.
+2. Saves a compressed, checksummed snapshot of the whole database whenever it changed (every `REDIS_BACKUP_INTERVAL_SECONDS`), and once more on shutdown after traffic stops. The previous snapshot is kept in `bingo:db:snapshot:prev` as a fallback.
+
+Safety rules:
+- **Fencing:** only the newest instance writes snapshots, so an old instance shutting down during a deploy can't overwrite newer data. Anything written to the old instance after the new one boots (a few seconds during a deploy) is lost, so avoid deploying during live test sessions.
+- **Fail closed:** if a restore is needed but Redis can't be reached, the server refuses to start rather than starting empty and overwriting the backup.
+- **Bounded loss:** on a crash (not a normal restart), up to one backup interval of changes can be lost.
+- **Use a Redis that persists its data,** e.g. Upstash (free tier) or a paid Render Key Value. Render's free Key Value doesn't persist to disk.
+
+Inspect it with `redis-cli`:
+
+```bash
+redis-cli -u "$REDIS_URL" GET bingo:db:generation
+redis-cli -u "$REDIS_URL" GET bingo:db:snapshot:meta     # createdAt, bytes, sha256, generation
+```
+
+Restore manually (e.g. to inspect production data locally):
+
+```bash
+redis-cli -u "$REDIS_URL" --raw GET bingo:db:snapshot | base64 -d | gunzip > bingo.db
+```
 
 ### Health checks
 
@@ -73,4 +106,4 @@ The current setup is **backend on Render** (`render.yaml`) and **frontend on Ver
 
 - Render's free instances sleep after ~15 minutes idle; the first request then takes ~50s. Open the app a minute before a test session.
 - Testers on the same Wi-Fi share one IP for rate limiting. Raise `AUTH_RATE_LIMIT_PER_MINUTE` for group sessions.
-- On the free plan, a redeploy wipes all test accounts and balances.
+- Without `REDIS_URL` or a disk, a redeploy on the free plan wipes all test accounts and balances.

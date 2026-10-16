@@ -16,6 +16,7 @@ import { formatLocalPhone, isValidEthiopianPhone } from './PhoneUtils.js';
 import crypto from 'crypto';
 import { leaderboardService } from './LeaderboardService.js';
 import { authEndpointRateLimitMiddleware } from './RateLimiter.js';
+import { startRedisBackups, flushRedisBackup, getRedisBackupStatus } from './RedisBackup.js';
 
 // Synchronously load .env if present
 try {
@@ -122,6 +123,8 @@ const io = new Server(httpServer, {
 });
 
 const multiRoomManager = new MultiRoomManager(io);
+// No-op unless start.ts connected to Redis (REDIS_URL)
+startRedisBackups(databaseService.getDb());
 telegramBotService.setSocketServer(io);
 dailyJackpotService.setIo(io);
 dailyJackpotService.startDailyScheduler();
@@ -153,7 +156,8 @@ app.get('/api/health', (req, res) => {
     database: {
       status: isDbHealthy ? 'connected' : 'error',
       mode: 'WAL',
-      persistentPathConfigured: Boolean(process.env.DATABASE_PATH?.trim())
+      persistentPathConfigured: Boolean(process.env.DATABASE_PATH?.trim()),
+      redisBackup: getRedisBackupStatus()
     },
     payments: {
       depositAccountConfigured: (() => {
@@ -2545,14 +2549,15 @@ app.use((err: any, req: any, res: any, next: any) => {
 });
 
 // ---------------- Process Lifecycle & Graceful Shutdown ----------------
+let shuttingDown = false;
 const gracefulShutdown = (signal: string) => {
+  if (shuttingDown) return;
+  shuttingDown = true;
   if (process.env.NODE_ENV !== 'test') {
     console.log(`[Server] Received ${signal}. Gracefully terminating server...`);
   }
-  httpServer.close(() => {
-    if (process.env.NODE_ENV !== 'test') {
-      console.log('[Server] HTTP and Socket server closed.');
-    }
+
+  const closeDatabase = () => {
     try {
       databaseService.getDb().close();
       if (process.env.NODE_ENV !== 'test') {
@@ -2561,12 +2566,31 @@ const gracefulShutdown = (signal: string) => {
     } catch (dbErr) {
       console.error('[Server] Error closing database:', dbErr);
     }
+  };
+
+  // Stop realtime + HTTP traffic first (io.close also closes the HTTP server), so no writes land after
+  // the final Redis snapshot; then snapshot, then close the database.
+  io.close(async () => {
+    if (process.env.NODE_ENV !== 'test') {
+      console.log('[Server] HTTP and Socket server closed.');
+    }
+    try {
+      await flushRedisBackup();
+    } catch (err: any) {
+      console.error('[Server] Final Redis backup failed:', err?.message || err);
+    }
+    closeDatabase();
     process.exit(0);
   });
 
   setTimeout(() => {
     console.error('[Server] Forced shutdown due to timeout.');
-    process.exit(1);
+    const hardExit = setTimeout(() => process.exit(1), 5000);
+    hardExit.unref();
+    flushRedisBackup().catch(() => {}).finally(() => {
+      closeDatabase();
+      process.exit(1);
+    });
   }, 10000).unref();
 };
 

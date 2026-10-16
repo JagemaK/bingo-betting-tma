@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { normalizeEthiopianPhone } from './PhoneUtils.js';
 import { RewardService, PromotionalReward } from './RewardService.js';
+import { resolveDatabasePath } from './dbPath.js';
 
 const require = createRequire(import.meta.url);
 const { DatabaseSync } = require('node:sqlite');
@@ -287,8 +288,8 @@ export class DatabaseService {
     }
 
     // DATABASE_PATH lets production point SQLite at a persistent disk (e.g. a Render disk mounted at /var/data)
-    const envDbPath = process.env.DATABASE_PATH?.trim() ? path.resolve(process.env.DATABASE_PATH.trim()) : '';
-    const dbPath = customPath || (isTest ? ':memory:' : (envDbPath || defaultDbPath));
+    const envDbPath = process.env.DATABASE_PATH?.trim() ? resolveDatabasePath() : '';
+    const dbPath = customPath || (isTest ? ':memory:' : resolveDatabasePath());
 
     this.dbPath = dbPath;
     this.isMemory = dbPath === ':memory:';
@@ -299,11 +300,12 @@ export class DatabaseService {
         fs.mkdirSync(dir, { recursive: true });
       }
       console.log(`[DatabaseService] Authoritative database initialized: ${dbPath}`);
-      if (process.env.NODE_ENV === 'production' && !customPath && !envDbPath) {
+      if (process.env.NODE_ENV === 'production' && !customPath && !envDbPath && !process.env.REDIS_URL) {
         console.warn(
-          '[DatabaseService] WARNING: DATABASE_PATH is not set. The database lives inside the app directory, which is ' +
-          'wiped on every deploy/restart on hosts with ephemeral disks (e.g. Render free plan). ALL balances, users and ' +
-          'ledger history will be lost. Mount a persistent disk and set DATABASE_PATH (e.g. /var/data/bingo.db).'
+          '[DatabaseService] WARNING: neither DATABASE_PATH nor REDIS_URL is set. The database lives inside the app ' +
+          'directory, which is wiped on every deploy/restart on hosts with ephemeral disks (e.g. Render free plan). ALL ' +
+          'balances, users and ledger history will be lost. Mount a persistent disk and set DATABASE_PATH ' +
+          '(e.g. /var/data/bingo.db), or set REDIS_URL to back the database up to Redis.'
         );
       }
     }
