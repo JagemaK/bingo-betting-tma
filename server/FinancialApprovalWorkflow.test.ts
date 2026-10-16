@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { setVerifiedPhone } from './testHelpers.js';
 import { app, httpServer } from './index.js';
 import { authService } from './AuthService.js';
 import { ledgerService } from './LedgerService.js';
@@ -107,6 +108,7 @@ describe('Financial Approval Workflow Verification Suite', () => {
 
     const balanceBefore = ledgerService.getUser(userA.playerId)!.walletBalance;
     const reservedBefore = ledgerService.getUser(userA.playerId)!.reservedBalance || 0;
+    setVerifiedPhone(userA.playerId, '0912345678');
 
     const res = await fetch(`${BASE_URL}/api/wallet/withdraw`, {
       method: 'POST',

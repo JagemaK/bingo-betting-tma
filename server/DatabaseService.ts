@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { normalizeEthiopianPhone } from './PhoneUtils.js';
 import { RewardService, PromotionalReward } from './RewardService.js';
+import { resolveDatabasePath } from './dbPath.js';
 
 const require = createRequire(import.meta.url);
 const { DatabaseSync } = require('node:sqlite');
@@ -286,7 +287,9 @@ export class DatabaseService {
       throw new Error(`SECURITY CRITICAL: Test execution attempted to connect to persistent production database: ${customPath}`);
     }
 
-    const dbPath = customPath || (isTest ? ':memory:' : defaultDbPath);
+    // DATABASE_PATH lets production point SQLite at a persistent disk (e.g. a Render disk mounted at /var/data)
+    const envDbPath = process.env.DATABASE_PATH?.trim() ? resolveDatabasePath() : '';
+    const dbPath = customPath || (isTest ? ':memory:' : resolveDatabasePath());
 
     this.dbPath = dbPath;
     this.isMemory = dbPath === ':memory:';
@@ -297,6 +300,14 @@ export class DatabaseService {
         fs.mkdirSync(dir, { recursive: true });
       }
       console.log(`[DatabaseService] Authoritative database initialized: ${dbPath}`);
+      if (process.env.NODE_ENV === 'production' && !customPath && !envDbPath && !process.env.REDIS_URL) {
+        console.warn(
+          '[DatabaseService] WARNING: neither DATABASE_PATH nor REDIS_URL is set. The database lives inside the app ' +
+          'directory, which is wiped on every deploy/restart on hosts with ephemeral disks (e.g. Render free plan). ALL ' +
+          'balances, users and ledger history will be lost. Mount a persistent disk and set DATABASE_PATH ' +
+          '(e.g. /var/data/bingo.db), or set REDIS_URL to back the database up to Redis.'
+        );
+      }
     }
 
     this.db = new DatabaseSync(dbPath);
@@ -766,10 +777,22 @@ export class DatabaseService {
         );
       `);
 
-      // Seed default active payment account if table is empty
+      // Seed a placeholder payment account for development/tests only.
+      // SECURITY: Never in production — customers would be told to send real money to a number nobody owns.
+      // Production deposits stay unavailable until a Super Admin configures the real Telebirr account.
       try {
+        const isProduction = process.env.NODE_ENV === 'production';
+        if (isProduction) {
+          const res = this.db.prepare(`
+            UPDATE payment_accounts SET is_active = 0, updated_at = datetime('now')
+            WHERE id = 'acc_telebirr_primary' AND phone_number = '0912345678' AND is_active = 1
+          `).run();
+          if (res.changes > 0) {
+            console.warn('[DatabaseService] Deactivated placeholder Telebirr account 0912345678. Configure the real deposit account in the Super Admin dashboard.');
+          }
+        }
         const accCount = (this.db.prepare('SELECT count(*) as count FROM payment_accounts').get() as any)?.count || 0;
-        if (accCount === 0) {
+        if (accCount === 0 && !isProduction) {
           this.db.prepare(`
             INSERT INTO payment_accounts (
               id, provider, account_name, phone_number, is_active, instructions, created_at, updated_at
@@ -800,7 +823,9 @@ export class DatabaseService {
         console.warn('[DatabaseService] Jackpot config seed warning:', seedCfgErr);
       }
 
-      // Automatic elevation of configured Super Admin accounts
+      // Automatic elevation of configured Super Admin accounts.
+      // SECURITY: Match only the Telegram-verified `telegram_username`, never the user-chosen `username`
+      // (otherwise anyone could register with a designated name and be elevated on the next boot).
       try {
         const superAdmins = ['mxt_mdn', 'sammy_erk', 'jagema_kello'];
         const envAdmins = (process.env.SUPER_ADMIN_TELEGRAM_USERNAMES || '')
@@ -814,11 +839,10 @@ export class DatabaseService {
           const updateStmt = this.db.prepare(`
             UPDATE users
             SET role = 'SUPER_ADMIN'
-            WHERE (LOWER(REPLACE(telegram_username, '@', '')) IN (${placeholders})
-               OR LOWER(REPLACE(username, '@', '')) IN (${placeholders}))
+            WHERE LOWER(REPLACE(telegram_username, '@', '')) IN (${placeholders})
               AND role != 'SUPER_ADMIN'
           `);
-          const res = updateStmt.run(...allTargetSuperAdmins, ...allTargetSuperAdmins);
+          const res = updateStmt.run(...allTargetSuperAdmins);
           if (res.changes > 0) {
             console.log(`[DatabaseService] Elevated ${res.changes} account(s) to SUPER_ADMIN: ${allTargetSuperAdmins.join(', ')}`);
           }
@@ -2040,6 +2064,7 @@ export class DatabaseService {
         id, phone, name, password_hash, password_salt, telegram_user_id, status, created_at, expires_at
       ) VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?)
       ON CONFLICT(phone) DO UPDATE SET
+        id = excluded.id,
         name = excluded.name,
         password_hash = excluded.password_hash,
         password_salt = excluded.password_salt,
@@ -3411,9 +3436,11 @@ export class DatabaseService {
       SELECT * FROM ledger_transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT 20
     `).all(userId);
 
+    // SECURITY: never hand password hashes/salts to staff dashboards
+    const { password_hash: _hash, password_salt: _salt, ...safeUser } = user as any;
     return {
       user: {
-        ...user,
+        ...safeUser,
         balance: wallet.balance,
         reserved_balance: wallet.reserved_balance,
         bonus_balance: wallet.bonus_balance || 0,

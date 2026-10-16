@@ -137,8 +137,10 @@ export function createRateLimitMiddleware(
   };
 }
 
-// 15 sensitive requests per minute per IP for sensitive auth operations
-export const authEndpointRateLimiter = new RateLimiter(15, 60 * 1000, 60 * 1000);
+// 15 sensitive requests per minute per IP for sensitive auth operations (override with AUTH_RATE_LIMIT_PER_MINUTE,
+// e.g. when many testers share one Wi-Fi / carrier NAT address)
+const authPerMinute = Number.parseInt(process.env.AUTH_RATE_LIMIT_PER_MINUTE || '', 10);
+export const authEndpointRateLimiter = new RateLimiter(Number.isFinite(authPerMinute) && authPerMinute > 0 ? authPerMinute : 15, 60 * 1000, 60 * 1000);
 export const authEndpointRateLimitMiddleware = createRateLimitMiddleware(authEndpointRateLimiter, {
   errorMessage: 'Too many authentication attempts. Please try again in 1 minute.'
 });

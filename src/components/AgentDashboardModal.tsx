@@ -969,9 +969,13 @@ export const AgentDashboardModal: React.FC<AgentDashboardModalProps> = ({
                           {dep.processedBy || '—'}
                         </td>
                         <td className="py-2.5 px-3 text-center">
-                          {dep.status === 'PENDING' ? (
+                          {dep.status === 'PENDING' && user?.role === 'AGENT' && dep.assignedAgentId !== user?.playerId ? (
+                            <span className="text-slate-400 text-[11px] italic">
+                              Assigned to {dep.assignedAgentId ? 'another agent' : 'a Super Admin'}
+                            </span>
+                          ) : dep.status === 'PENDING' ? (
                             <div className="inline-flex items-center gap-1.5">
-                              {dep.assignedAgentId !== user?.playerId && (
+                              {user?.role !== 'AGENT' && dep.assignedAgentId !== user?.playerId && (
                                 <button
                                   onClick={() => handleAssignDeposit(dep.id)}
                                   disabled={Boolean(processingId)}

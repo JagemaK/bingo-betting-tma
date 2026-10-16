@@ -67,10 +67,11 @@ export class TelegramBotService {
   private io?: SocketIOServer;
   private botToken?: string;
   private botUsername: string = process.env.TELEGRAM_BOT_USERNAME || 'BINGOBEET_BOT';
-  private pendingVerifications: Map<string, { phone: string; requestedAt: number }> = new Map(); // tgUserId -> { phone }
-  private pendingResets: Map<string, { phone: string; requestedAt: number }> = new Map(); // tgUserId -> { phone }
+  private pendingVerifications: Map<string, { phone: string; requestedAt: number; pendingId?: string }> = new Map(); // tgUserId -> { phone }
+  private pendingResets: Map<string, { phone: string; requestedAt: number; requestId?: string }> = new Map(); // tgUserId -> { phone }
   private isPolling: boolean = false;
   private lastUpdateId: number = 0;
+  private updateMode: 'off' | 'polling' | 'webhook' = 'off';
 
   constructor(io?: SocketIOServer) {
     this.io = io;
@@ -90,17 +91,23 @@ export class TelegramBotService {
     this.botUsername = process.env.TELEGRAM_BOT_USERNAME || this.botUsername;
     if (!this.botToken || this.isPolling) return;
     this.isPolling = true;
+    this.updateMode = 'polling';
     console.log(`[TelegramBot] Started polling for updates on @${this.botUsername}...`);
     this.pollLoop();
   }
 
   public stopPolling() {
     this.isPolling = false;
+    if (this.updateMode === 'polling') this.updateMode = 'off';
   }
 
-  public async setWebhook(webhookUrl: string, secretToken?: string) {
+  public getUpdateMode(): 'off' | 'polling' | 'webhook' {
+    return this.updateMode;
+  }
+
+  public async setWebhook(webhookUrl: string, secretToken?: string): Promise<boolean> {
     this.botToken = process.env.TELEGRAM_BOT_TOKEN || this.botToken;
-    if (!this.botToken) return;
+    if (!this.botToken) return false;
     this.stopPolling();
     try {
       const secret = secretToken || process.env.TELEGRAM_WEBHOOK_SECRET;
@@ -112,9 +119,16 @@ export class TelegramBotService {
         payload.secret_token = secret;
       }
       const data = await this.callTelegramApi('setWebhook', payload);
-      console.log(`[TelegramBot] Webhook successfully set to ${webhookUrl}:`, data);
+      if (data?.ok) {
+        this.updateMode = 'webhook';
+        console.log(`[TelegramBot] Webhook successfully set to ${webhookUrl}`);
+        return true;
+      }
+      console.error('[TelegramBot] Telegram rejected setWebhook:', data);
+      return false;
     } catch (e) {
       console.error('[TelegramBot] Failed to set webhook:', e);
+      return false;
     }
   }
 
@@ -237,10 +251,18 @@ export class TelegramBotService {
       const parts = text.split(' ');
       const payload = parts[1] || '';
 
-      if (payload.startsWith('reg_') || payload.startsWith('verify_')) {
-        const rawPhone = payload.replace('reg_', '').replace('verify_', '');
-        const targetPhone = this.normalizePhone(rawPhone);
-        this.pendingVerifications.set(String(fromUser.id), { phone: targetPhone, requestedAt: Date.now() });
+      if (payload.startsWith('rg_') || payload.startsWith('reg_') || payload.startsWith('verify_')) {
+        // rg_<secret>: deep link bound to one specific web sign-up request (see AuthService.initiateRegistration)
+        let targetPhone: string;
+        let boundPendingId: string | undefined;
+        if (payload.startsWith('rg_')) {
+          boundPendingId = `reg_${payload.slice(3)}`;
+          targetPhone = authService.getPendingRegistrationPhone(boundPendingId) || '';
+        } else {
+          const rawPhone = payload.replace('reg_', '').replace('verify_', '');
+          targetPhone = this.normalizePhone(rawPhone);
+        }
+        this.pendingVerifications.set(String(fromUser.id), { phone: targetPhone, requestedAt: Date.now(), pendingId: boundPendingId });
 
         const replyText = `👋 <b>እንኳን ወደ BINGO BET በደህና መጡ!</b>\n\nለመመዝገብ የጠየቁት ስልክ ቁጥር: <code>${targetPhone}</code>\n\nእባክዎ አካውንቶን ለማረጋገጥ ከታች ያለውን <b>📲 Share My Phone Number</b> የሚለውን ቁልፍ ይጫኑ።\n\n<i>ማሳሰቢያ፡ በቴሌግራም የሚያጋሩት ስልክ ቁጥር በመተግበሪያው ላይ ካስገቡት ስልክ ጋር መመሳሰል አለበት።</i>`;
         const replyMarkup = {
@@ -273,10 +295,18 @@ export class TelegramBotService {
         };
       }
 
-      if (payload.startsWith('reset_')) {
-        const rawPhone = payload.replace('reset_', '');
-        const targetPhone = this.normalizePhone(rawPhone);
-        this.pendingResets.set(String(fromUser.id), { phone: targetPhone, requestedAt: Date.now() });
+      if (payload.startsWith('rst_') || payload.startsWith('reset_')) {
+        // rst_<requestId>: deep link bound to one specific reset request. Legacy reset_<phone> links carry
+        // no requestId and can no longer authorize a reset.
+        let targetPhone: string;
+        let requestId: string | undefined;
+        if (payload.startsWith('rst_')) {
+          requestId = payload.slice(4);
+          targetPhone = authService.getPasswordResetPhoneByRequestId(requestId) || '';
+        } else {
+          targetPhone = this.normalizePhone(payload.replace('reset_', ''));
+        }
+        this.pendingResets.set(String(fromUser.id), { phone: targetPhone, requestedAt: Date.now(), requestId });
 
         const replyText = `🔐 <b>የይለፍ ቃል መቀየሪያ (Password Reset Request)</b>\n\n` +
           `የይለፍ ቃል ለመቀየር የጠየቁት ስልክ ቁጥር: <code>${targetPhone}</code>\n\n` +
@@ -457,7 +487,25 @@ export class TelegramBotService {
         }
 
         // MATCH! Authorize password reset
-        const authResult = authService.authorizePasswordReset(sharedPhone);
+        const authResult = authService.authorizePasswordReset(sharedPhone, pendingReset.requestId);
+        if (!authResult.success) {
+          const staleText = `⚠️ <b>የይለፍ ቃል መቀየሪያ ሊንክ ጊዜው አልፎበታል (Reset link expired)</b>\n\n` +
+            `እባክዎ በመተግበሪያው ላይ የይለፍ ቃል መቀየርን እንደገና ይጀምሩ። (Please start the password reset again in the app.)`;
+          if (!isWebhook) {
+            await this.sendMessage(chatId, staleText, { reply_markup: { remove_keyboard: true } });
+          }
+          return {
+            success: false,
+            error: authResult.error,
+            webhookResponse: {
+              method: 'sendMessage',
+              chat_id: chatId,
+              text: staleText,
+              parse_mode: 'HTML',
+              reply_markup: { remove_keyboard: true }
+            }
+          };
+        }
         if (authResult.success) {
           if (this.io) {
             this.io.to(`reset_${sharedPhone}`).emit('PASSWORD_RESET_AUTHORIZED', {
@@ -493,7 +541,6 @@ export class TelegramBotService {
       const expectedPhone = pendingInfo?.phone;
       this.pendingVerifications.delete(String(fromUser.id));
 
-      const displayName = `${fromUser.first_name || ''} ${fromUser.last_name || ''}`.trim() || fromUser.username || `Player_${sharedPhone.slice(-4)}`;
 
       // STRICT PHONE MATCHING:
       // If the user initiated registration for an expected phone, the shared contact MUST match that phone!
@@ -533,10 +580,13 @@ export class TelegramBotService {
       }
 
       // MATCH CONFIRMED (or direct registration): Complete registration and create new user account
+      // SECURITY: pass the real Telegram @username (assigned by Telegram), never the display name: first/last
+      // names are free text anyone can set, and the username decides designated Super Admin status.
       const verifyResult = authService.completeRegistrationWithMatchedPhone(
         sharedPhone,
         String(fromUser.id),
-        displayName
+        fromUser.username,
+        pendingInfo?.pendingId
       );
 
       if (verifyResult.success && verifyResult.user) {
@@ -689,7 +739,8 @@ export class TelegramBotService {
     const verifyResult = authService.completeRegistrationWithMatchedPhone(
       actualShared,
       String(tgUserId),
-      username
+      username,
+      authService.getCurrentPendingRegistrationId(targetExpected)
     );
 
     if (verifyResult.success) {
@@ -733,7 +784,7 @@ export class TelegramBotService {
       return { success: false, denied: true, error: 'Phone mismatch: Password reset denied.' };
     }
 
-    const authResult = authService.authorizePasswordReset(actualShared);
+    const authResult = authService.authorizePasswordReset(actualShared, authService.getCurrentPasswordResetRequestId(actualShared));
     if (authResult.success) {
       if (this.io) {
         this.io.to(`reset_${actualShared}`).emit('PASSWORD_RESET_AUTHORIZED', {

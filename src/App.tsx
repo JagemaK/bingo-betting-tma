@@ -536,16 +536,17 @@ export default function App() {
     if (!currentUser) {
       // Auto-fallback to instant guest account so the user is never blocked from playing!
       try {
-        const res = await fetch(apiUrl('/api/auth/guest'), {
+        // Same server-side guest creation as the "Play as guest" button (the server assigns the guest ID)
+        const res = await fetch(apiUrl('/api/user/sync'), {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' }
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: `Player_${Math.floor(1000 + Math.random() * 9000)}` })
         });
-        const data = await res.json();
-        if (data.success && data.user) {
+        const data = res.ok ? await res.json() : null;
+        if (data?.success && data.user) {
           currentUser = data.user;
           setUser(data.user);
           auth.setGuestUser(data.user);
-          if (data.sessionToken) localStorage.setItem('bingo_auth_token', data.sessionToken);
         } else {
           handleOpenSignUp('register');
           return;

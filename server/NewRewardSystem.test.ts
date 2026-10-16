@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { relaxReferralRules } from './testHelpers.js';
 import { databaseService } from './DatabaseService.js';
 import { RewardService } from './RewardService.js';
 
@@ -379,6 +380,10 @@ describe('AUTHORITATIVE NEW REWARDS SYSTEM SUITE (3 REWARD TYPES)', () => {
   // 3. REFERRAL REWARDS (10 ETB PER QUALIFIED DEPOSITING REFEREE)
   // =========================================================================
   describe('3. Referral Rewards: Qualification & Claiming', () => {
+    // Claim mechanics with small fixtures; anti-farming thresholds are covered in AbuseSafeguards.test.ts
+    let restoreReferralRules: () => void;
+    beforeAll(() => { restoreReferralRules = relaxReferralRules(); });
+    afterAll(() => restoreReferralRules());
     it('Referral link alone / registration alone -> NO reward granted', () => {
       const referrerId = `usr_ref_agent_${Date.now()}_1`;
       databaseService.createUser({

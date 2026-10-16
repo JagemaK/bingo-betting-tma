@@ -12,10 +12,11 @@ import { computeCommitmentHash } from './BingoEngine.js';
 import { databaseService } from './DatabaseService.js';
 import { dailyJackpotService } from './DailyJackpotService.js';
 import { hashPassword, verifyPassword } from './PasswordUtils.js';
-import { formatLocalPhone, isValidEthiopianPhone } from './PhoneUtils.js';
+import { formatLocalPhone, isValidEthiopianPhone, maskPhone } from './PhoneUtils.js';
 import crypto from 'crypto';
 import { leaderboardService } from './LeaderboardService.js';
 import { authEndpointRateLimitMiddleware } from './RateLimiter.js';
+import { startRedisBackups, flushRedisBackup, getRedisBackupStatus } from './RedisBackup.js';
 
 // Synchronously load .env if present
 try {
@@ -73,6 +74,14 @@ export const isOriginAllowed = (origin?: string): boolean => {
 
 const app = express();
 
+// Behind a hosting proxy (Render), req.ip is otherwise the proxy's address, so the per-IP auth rate limiter
+// would put every user in one bucket and a handful of logins would lock everyone out. Trust one proxy hop by
+// default in production / on Render; override with TRUST_PROXY (a hop count, "true", or "false").
+const trustProxySetting = process.env.TRUST_PROXY ?? ((process.env.RENDER || process.env.NODE_ENV === 'production') ? '1' : '');
+if (trustProxySetting && trustProxySetting !== 'false') {
+  app.set('trust proxy', /^\d+$/.test(trustProxySetting) ? Number(trustProxySetting) : trustProxySetting === 'true' ? true : trustProxySetting);
+}
+
 const corsOptions: cors.CorsOptions = {
   origin: (origin, callback) => {
     if (isOriginAllowed(origin)) {
@@ -114,6 +123,8 @@ const io = new Server(httpServer, {
 });
 
 const multiRoomManager = new MultiRoomManager(io);
+// No-op unless start.ts connected to Redis (REDIS_URL)
+startRedisBackups(databaseService.getDb());
 telegramBotService.setSocketServer(io);
 dailyJackpotService.setIo(io);
 dailyJackpotService.startDailyScheduler();
@@ -144,7 +155,18 @@ app.get('/api/health', (req, res) => {
     version: '1.0.0',
     database: {
       status: isDbHealthy ? 'connected' : 'error',
-      mode: 'WAL'
+      mode: 'WAL',
+      persistentPathConfigured: Boolean(process.env.DATABASE_PATH?.trim()),
+      redisBackup: getRedisBackupStatus()
+    },
+    payments: {
+      depositAccountConfigured: (() => {
+        try { return Boolean(databaseService.getActivePaymentAccount()); } catch { return false; }
+      })()
+    },
+    telegram: {
+      botConfigured: Boolean(process.env.TELEGRAM_BOT_TOKEN),
+      mode: telegramBotService.getUpdateMode()
     },
     rooms: {
       total: roomSummaries.length,
@@ -326,6 +348,21 @@ const requireAdmin = (req: any, res: any, next: any) => {
   });
 };
 
+// SECURITY: An agent may only approve/reject deposits assigned to them. A deposit is assigned automatically to the
+// agent who holds the receiving payment account (or reassigned by a Super Admin), i.e. the only agent who can see
+// whether the money actually arrived. Without this, any agent could approve fake deposits for an accomplice.
+const agentMayProcessDeposit = (req: any, res: any): boolean => {
+  if (req.user?.role !== 'AGENT') return true;
+  const deposit = databaseService.getDepositRequest(req.params.id);
+  if (!deposit) return true; // let the ledger return its normal "not found" error
+  const agentId = req.user.playerId || req.user.id;
+  if (deposit.assigned_agent_id !== agentId) {
+    res.status(403).json({ error: 'This deposit is assigned to another payment account holder. Only the assigned agent or a Super Admin can process it.' });
+    return false;
+  }
+  return true;
+};
+
 const optionalSession = (req: any, res: any, next: any) => {
   const authHeader = req.headers.authorization;
   const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.substring(7) : null;
@@ -389,12 +426,14 @@ app.post('/api/auth/register', authEndpointRateLimitMiddleware, async (req, res)
 });
 
 // Upgrade Guest Account to Real Account
-app.post('/api/auth/upgrade-guest', authEndpointRateLimitMiddleware, optionalSession, (req: any, res) => {
-  const guestPlayerId = req.body.guestPlayerId || req.body.playerId || req.user?.playerId || req.user?.id;
+// SECURITY: The guest identity comes solely from the caller's session. A client-supplied guestPlayerId
+// is never trusted, otherwise anyone who learns a guest ID could claim that account.
+app.post('/api/auth/upgrade-guest', authEndpointRateLimitMiddleware, authenticateSession, (req: any, res) => {
+  const guestPlayerId = req.user.playerId;
   const { phone, password, name } = req.body;
 
-  if (!guestPlayerId || !phone || !password) {
-    return res.status(400).json({ error: 'guestPlayerId, phone, and password are required.' });
+  if (!phone || !password) {
+    return res.status(400).json({ error: 'phone and password are required.' });
   }
 
   const result = authService.upgradeGuestAccount(guestPlayerId, phone, password, name);
@@ -449,21 +488,9 @@ app.get('/api/auth/registration-status/:target', (req, res) => {
   res.json(result);
 });
 
-// 2. Verify Phone number via Telegram / Code
-app.post('/api/auth/verify', authEndpointRateLimitMiddleware, (req, res) => {
-  const { phone, code } = req.body;
-  const result = authService.verifyPhone(phone, code);
-  if (!result.success) {
-    return res.status(400).json({ error: result.error });
-  }
-  res.json(result);
-});
-
-// 2b. Check phone verification status (Polling)
-app.get('/api/auth/check-verification/:phone', (req, res) => {
-  const result = authService.checkVerification(req.params.phone);
-  res.json(result);
-});
+// SECURITY: POST /api/auth/verify and GET /api/auth/check-verification/:phone were removed. The first issued
+// a login session for any phone number without checking anything; the second exposed any user's ID and
+// balance by phone number. Phone verification happens only through the Telegram bot contact share.
 
 // 2c. Forgot Password - Initiate
 app.post('/api/auth/forgot-password-initiate', authEndpointRateLimitMiddleware, (req, res) => {
@@ -479,8 +506,10 @@ app.post('/api/auth/forgot-password-initiate', authEndpointRateLimitMiddleware, 
 });
 
 // 2d. Forgot Password - Status Polling
+// The reset token is only returned with the secret requestId from forgot-password-initiate
 app.get('/api/auth/forgot-password-status/:phone', (req, res) => {
-  const result = authService.getPasswordResetStatus(req.params.phone);
+  const requestId = typeof req.query.requestId === 'string' ? req.query.requestId : undefined;
+  const result = authService.getPasswordResetStatus(req.params.phone, requestId);
   res.json(result);
 });
 
@@ -565,23 +594,27 @@ app.post('/api/auth/telegram-login', (req, res) => {
 });
 
 // Sync or fetch Telegram / Web user
+// SECURITY: Authenticated callers only ever receive their own account. Unauthenticated callers can only
+// create a brand-new guest with a server-generated ID; a client-supplied playerId is never looked up,
+// so existing accounts (and their balances) cannot be read or squatted through this endpoint.
 app.post('/api/user/sync', optionalSession, (req: any, res) => {
-  const currentUserId = req.user?.playerId;
-  const targetId = currentUserId || req.body.playerId;
-  if (!targetId) {
-    return res.status(401).json({ error: 'Authentication required' });
+  if (req.user) {
+    const user = ledgerService.getUser(req.user.playerId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    return res.json({ success: true, user });
   }
 
-  const isGuest = !req.user && (req.body.isGuest || !req.body.telegramId);
-  const accountType = isGuest ? 'GUEST' : (req.body.isBot ? 'BOT' : 'REAL');
-
+  const guestId = `usr_guest_${crypto.randomBytes(12).toString('hex')}`;
+  const requestedName = typeof req.body.username === 'string' ? req.body.username.trim().slice(0, 32) : '';
   const user = ledgerService.getOrCreateUser(
-    targetId,
-    req.body.username || (isGuest ? `Guest_${targetId.slice(-4)}` : 'TelegramPlayer'),
-    req.body.avatarUrl,
+    guestId,
+    requestedName || `Guest_${guestId.slice(-4)}`,
+    undefined,
     'USER',
     0.00,
-    accountType
+    'GUEST'
   );
   res.json({ success: true, user });
 });
@@ -633,20 +666,15 @@ app.get('/api/user/profile/:playerId?', optionalSession, (req: any, res) => {
 });
 
 // Fetch user account and balance
-app.get('/api/user/:playerId?', optionalSession, (req: any, res) => {
+app.get('/api/user/:playerId?', authenticateSession, (req: any, res) => {
   const requestedId = req.params.playerId;
-  const currentUserId = req.user?.playerId;
+  const currentUserId = req.user.playerId;
 
-  if (currentUserId && requestedId && requestedId !== currentUserId) {
+  if (requestedId && requestedId !== currentUserId) {
     return res.status(403).json({ error: 'Access denied: Cannot access another user\'s balance' });
   }
 
-  const targetPlayerId = requestedId || currentUserId;
-  if (!targetPlayerId) {
-    return res.status(401).json({ error: 'Authentication required' });
-  }
-
-  const user = ledgerService.getUser(targetPlayerId);
+  const user = ledgerService.getUser(currentUserId);
   if (!user) {
     return res.status(404).json({ error: 'User not found' });
   }
@@ -654,20 +682,15 @@ app.get('/api/user/:playerId?', optionalSession, (req: any, res) => {
 });
 
 // Get user transaction ledger
-app.get('/api/ledger/:playerId?', optionalSession, (req: any, res) => {
+app.get('/api/ledger/:playerId?', authenticateSession, (req: any, res) => {
   const requestedId = req.params.playerId;
-  const currentUserId = req.user?.playerId;
+  const currentUserId = req.user.playerId;
 
-  if (currentUserId && requestedId && requestedId !== currentUserId) {
+  if (requestedId && requestedId !== currentUserId) {
     return res.status(403).json({ error: 'Access denied: Cannot access another user\'s ledger' });
   }
 
-  const targetPlayerId = requestedId || currentUserId;
-  if (!targetPlayerId) {
-    return res.status(401).json({ error: 'Authentication required' });
-  }
-
-  const entries = ledgerService.getLedgerForUser(targetPlayerId);
+  const entries = ledgerService.getLedgerForUser(currentUserId);
   res.json({ entries });
 });
 
@@ -688,6 +711,10 @@ app.post('/api/wallet/deposit', authenticateSession, async (req: any, res) => {
     const paymentMethod = req.body.paymentMethod;
     if (paymentMethod && paymentMethod !== 'Telebirr') {
       return res.status(400).json({ error: 'Telebirr is the only supported payment method' });
+    }
+
+    if (!databaseService.getActivePaymentAccount()) {
+      return res.status(503).json({ error: 'Deposits are temporarily unavailable. Please contact support.' });
     }
 
     const rawAmount = typeof amount === 'string' ? parseFloat(amount) : amount;
@@ -808,6 +835,18 @@ app.post('/api/wallet/withdraw', authenticateSession, async (req: any, res) => {
     }
     if (userObj.registration_status === 'PENDING') {
       return res.status(403).json({ success: false, error: 'Please complete phone verification before requesting a withdrawal' });
+    }
+
+    // SECURITY: Payouts only go to the account's own verified phone, so a hijacked session cannot redirect funds
+    const verifiedPhone = databaseService.getUserById(targetPlayerId)?.phone;
+    if (!verifiedPhone) {
+      return res.status(403).json({ success: false, error: 'Please verify your phone number before requesting a withdrawal' });
+    }
+    if (normalizedPhone !== verifiedPhone) {
+      return res.status(400).json({
+        success: false,
+        error: `Withdrawals can only be sent to your verified Telebirr number (${formatLocalPhone(verifiedPhone) || verifiedPhone}). Contact support to change it.`
+      });
     }
 
     // Balance is atomically reserved and held; status is PENDING
@@ -1048,18 +1087,15 @@ app.post('/api/rewards/claim', authenticateSession, (req: any, res) => {
 });
 
 // Referral & Affiliate Income (Authoritative 10 ETB per qualified deposit)
-app.get('/api/referral/:playerId?', optionalSession, (req: any, res) => {
-  const currentUserId = req.user?.playerId;
+app.get('/api/referral/:playerId?', authenticateSession, (req: any, res) => {
+  const currentUserId = req.user.playerId;
   const requestedId = req.params.playerId;
 
-  if (currentUserId && requestedId && requestedId !== currentUserId) {
+  if (requestedId && requestedId !== currentUserId) {
     return res.status(403).json({ error: 'Access denied: Cannot access another user\'s referral data' });
   }
 
-  const targetId = requestedId || currentUserId;
-  if (!targetId) {
-    return res.status(401).json({ error: 'Authentication required' });
-  }
+  const targetId = currentUserId;
 
   const refStats = databaseService.rewardService.getReferralRewards(targetId);
   res.json({
@@ -1409,16 +1445,8 @@ app.get('/api/payment/active-account', (req, res) => {
   try {
     const account = databaseService.getActivePaymentAccount();
     if (!account) {
-      return res.json({
-        success: true,
-        account: {
-          id: 'acc_telebirr_primary',
-          provider: 'Telebirr',
-          account_name: 'Official Platform Account',
-          phone_number: '0912345678',
-          instructions: 'Send your deposit via Telebirr, then enter your transaction/reference number below.'
-        }
-      });
+      // Never fall back to a made-up number: the client shows "deposits unavailable" instead
+      return res.json({ success: true, account: null });
     }
     res.json({
       success: true,
@@ -1483,6 +1511,7 @@ app.get('/api/staff/deposits', requireStaff, (req: any, res) => {
 });
 
 app.post('/api/staff/deposits/:id/approve', requireStaff, async (req: any, res) => {
+  if (!agentMayProcessDeposit(req, res)) return;
   try {
     const actorId = req.user.playerId || req.user.id;
     const result = await ledgerService.approveDeposit(actorId, req.params.id);
@@ -1540,6 +1569,7 @@ app.post('/api/staff/deposits/:id/approve', requireStaff, async (req: any, res) 
 });
 
 app.post('/api/staff/deposits/:id/reject', requireStaff, (req: any, res) => {
+  if (!agentMayProcessDeposit(req, res)) return;
   const { reason } = req.body;
   try {
     const actorId = req.user.playerId || req.user.id;
@@ -1580,6 +1610,10 @@ app.post('/api/staff/deposits/:id/reject', requireStaff, (req: any, res) => {
 });
 
 app.post('/api/staff/deposits/:id/assign', requireStaff, (req: any, res) => {
+  // Agents cannot (re)assign deposits, otherwise they could claim one and approve it
+  if (req.user?.role === 'AGENT') {
+    return res.status(403).json({ error: 'Only a Super Admin can assign deposits to an agent.' });
+  }
   try {
     const actorId = req.user.playerId || req.user.id;
     const targetAgentId = req.body.agentId || req.body.agent_id || actorId;
@@ -1741,6 +1775,10 @@ app.post('/api/staff/withdrawals/:id/assign', requireStaff, (req: any, res) => {
   }
 });
 
+// Agents see masked customer phone numbers in the customer directory (they get the full number only on the
+// deposit/withdrawal requests they process, where it's needed to verify or send a payment). Super Admins see all.
+const phoneForViewer = (req: any, phone?: string | null) => (req.user?.role === 'AGENT' ? maskPhone(phone) : phone);
+
 app.get('/api/staff/customers', requireStaff, (req: any, res) => {
   try {
     const search = (req.query.search || req.query.query) as string;
@@ -1752,7 +1790,7 @@ app.get('/api/staff/customers', requireStaff, (req: any, res) => {
         return {
           id: u.id,
           username: u.username,
-          phone: u.phone,
+          phone: phoneForViewer(req, u.phone),
           account_status: u.account_status,
           created_at: u.created_at,
           last_activity: stats.last_activity,
@@ -1781,12 +1819,14 @@ app.get('/api/staff/customers/:id', requireStaff, (req: any, res) => {
       action: 'CUSTOMER_LOOKUP',
       target_user_id: req.params.id
     });
+    const maskedPhone = phoneForViewer(req, detail.user.phone);
+    detail.user = { ...detail.user, phone: maskedPhone };
     res.json({
       success: true,
       customer: {
         id: detail.user.id,
         username: detail.user.username,
-        phone: detail.user.phone,
+        phone: maskedPhone,
         account_status: detail.user.account_status,
         created_at: detail.user.created_at,
         balance: detail.user.balance,
@@ -2535,14 +2575,15 @@ app.use((err: any, req: any, res: any, next: any) => {
 });
 
 // ---------------- Process Lifecycle & Graceful Shutdown ----------------
+let shuttingDown = false;
 const gracefulShutdown = (signal: string) => {
+  if (shuttingDown) return;
+  shuttingDown = true;
   if (process.env.NODE_ENV !== 'test') {
     console.log(`[Server] Received ${signal}. Gracefully terminating server...`);
   }
-  httpServer.close(() => {
-    if (process.env.NODE_ENV !== 'test') {
-      console.log('[Server] HTTP and Socket server closed.');
-    }
+
+  const closeDatabase = () => {
     try {
       databaseService.getDb().close();
       if (process.env.NODE_ENV !== 'test') {
@@ -2551,12 +2592,31 @@ const gracefulShutdown = (signal: string) => {
     } catch (dbErr) {
       console.error('[Server] Error closing database:', dbErr);
     }
+  };
+
+  // Stop realtime + HTTP traffic first (io.close also closes the HTTP server), so no writes land after
+  // the final Redis snapshot; then snapshot, then close the database.
+  io.close(async () => {
+    if (process.env.NODE_ENV !== 'test') {
+      console.log('[Server] HTTP and Socket server closed.');
+    }
+    try {
+      await flushRedisBackup();
+    } catch (err: any) {
+      console.error('[Server] Final Redis backup failed:', err?.message || err);
+    }
+    closeDatabase();
     process.exit(0);
   });
 
   setTimeout(() => {
     console.error('[Server] Forced shutdown due to timeout.');
-    process.exit(1);
+    const hardExit = setTimeout(() => process.exit(1), 5000);
+    hardExit.unref();
+    flushRedisBackup().catch(() => {}).finally(() => {
+      closeDatabase();
+      process.exit(1);
+    });
   }, 10000).unref();
 };
 
@@ -2578,12 +2638,31 @@ if (process.env.NODE_ENV !== 'test') {
         console.log(`[TelegramBot] Configuring menu button for: ${cleanUrl}`);
         telegramBotService.setMenuButton(cleanUrl);
       }
-      // Always delete any stale webhook and start polling for 100% reliable local/tunnel dev
-      telegramBotService.deleteWebhook().then(() => {
+      // Production: use a webhook so Telegram wakes a sleeping instance (e.g. Render free plan) and only one
+      // instance receives updates. Needs a public backend URL (TELEGRAM_WEBHOOK_URL, or Render's automatic
+      // RENDER_EXTERNAL_URL) plus TELEGRAM_WEBHOOK_SECRET. Otherwise fall back to polling (local/tunnel dev).
+      const webhookBase = (process.env.TELEGRAM_WEBHOOK_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/+$/, '');
+      const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
+      const startPollingMode = () => telegramBotService.deleteWebhook().then(() => {
         telegramBotService.startPolling();
       }).catch(err => {
         console.error('[TelegramBot] Failed to reset webhook and start polling:', err);
       });
+
+      if (webhookBase && webhookSecret) {
+        const hookUrl = webhookBase.endsWith('/api/telegram/webhook') ? webhookBase : `${webhookBase}/api/telegram/webhook`;
+        telegramBotService.setWebhook(hookUrl, webhookSecret).then((ok) => {
+          if (!ok) {
+            console.warn('[TelegramBot] Webhook registration failed; falling back to polling.');
+            startPollingMode();
+          }
+        });
+      } else {
+        if (process.env.NODE_ENV === 'production') {
+          console.warn('[TelegramBot] TELEGRAM_WEBHOOK_SECRET (and a public URL) not set; using polling. The bot will stop responding while the instance sleeps.');
+        }
+        startPollingMode();
+      }
     }
   });
 }

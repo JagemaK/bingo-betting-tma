@@ -37,8 +37,8 @@ describe('AuthService Suite', () => {
     expect(res.phone).toBe(authService.normalizePhone(testPhone));
     expect(res.user?.username).toBe('Abebe Bikila');
 
-    // Verify phone
-    const verifyRes = authService.verifyPhone(testPhone);
+    // Verify phone via the bot contact share bound to this sign-up request
+    const verifyRes = authService.completeVerifiedRegistration(testPhone, 700000000 + randomSuffix, undefined, (res as any).pendingId);
     expect(verifyRes.success).toBe(true);
     expect(verifyRes.requiresVerification).toBe(false);
 

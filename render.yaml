@@ -2,12 +2,46 @@ services:
   - type: web
     name: bingo-bet-app
     runtime: node
+    # IMPORTANT: the free plan has no persistent disk, so the SQLite file is wiped on every deploy and
+    # restart. Either set REDIS_URL (the server backs the database up to Redis and restores it on boot),
+    # or switch to a paid plan and uncomment the `disk` block and DATABASE_PATH below.
     plan: free
     region: frankfurt
     buildCommand: npm install --include=dev && npm run build
     startCommand: npm start
+    healthCheckPath: /api/health/readiness
+    # disk:
+    #   name: bingo-data
+    #   mountPath: /var/data
+    #   sizeGB: 1
     envVars:
       - key: NODE_ENV
         value: production
       - key: PORT
         value: 10000
+      # node:sqlite needs Node 22.13+
+      - key: NODE_VERSION
+        value: "22"
+      # - key: DATABASE_PATH
+      #   value: /var/data/bingo.db
+      # Redis that stores database backups, e.g. rediss://default:<password>@<host>:6379 (Upstash) or a
+      # Render Key Value internal URL. Use a Redis that persists its data. Once set, Redis is required to boot.
+      - key: REDIS_URL
+        sync: false
+      # REQUIRED in production: the server refuses to start without it (Daily Jackpot fairness seed)
+      - key: JACKPOT_SERVER_SECRET
+        generateValue: true
+      # Secrets: set these in the Render dashboard (never commit them)
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_BOT_USERNAME
+        sync: false
+      # Random string of letters/digits/_/- (e.g. `openssl rand -hex 32`). Enables webhook mode for the bot.
+      - key: TELEGRAM_WEBHOOK_SECRET
+        sync: false
+      # The deployed Mini App URL (e.g. https://your-app.vercel.app); used for the bot menu button and CORS
+      - key: FRONTEND_URL
+        sync: false
+      # Comma-separated numeric Telegram user IDs that should be Super Admins
+      - key: SUPER_ADMIN_TELEGRAM_IDS
+        sync: false

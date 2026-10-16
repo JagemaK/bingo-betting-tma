@@ -59,6 +59,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [confirmPassword, setConfirmPassword] = useState<string>('');
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [pendingPhone, setPendingPhone] = useState<string>('');
+  // Secret from forgot-password-initiate; required by the server to release the reset token
+  const [resetRequestId, setResetRequestId] = useState<string>('');
   const [botUsername, setBotUsername] = useState<string>('BINGOBEET_BOT');
   const [botDeepLink, setBotDeepLink] = useState<string>('');
   const [deniedReason, setDeniedReason] = useState<string | null>(null);
@@ -201,10 +203,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       if (!target || (data.phone && data.phone.endsWith(target.slice(-8)))) {
         if (!data.resetToken && target) {
           try {
-            const res = await fetch(apiUrl(`/api/auth/forgot-password-status/${target}`));
+            const res = await fetch(apiUrl(`/api/auth/forgot-password-status/${target}?requestId=${encodeURIComponent(resetRequestId)}`));
             if (res.ok) {
               const fetched = await res.json();
-              if (fetched.status === 'authorized' && fetched.resetToken) {
+              if ((fetched.status === 'authorized' || fetched.status === 'verified') && fetched.resetToken) {
                 setResetToken(fetched.resetToken);
                 soundService.playLineChime();
                 telegramSdk.triggerHaptic('success');
@@ -255,7 +257,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       socket.off('PASSWORD_RESET_AUTHORIZED', handleResetAuthorized);
       socket.off('PASSWORD_RESET_DENIED', handleResetDenied);
     };
-  }, [socket, isOpen, mode, pendingPhone, phone, onSuccess]);
+  }, [socket, isOpen, mode, pendingPhone, phone, onSuccess, resetRequestId]);
 
   // Auto-poll registration status when waiting on Step 2 (Register)
   React.useEffect(() => {
@@ -291,10 +293,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(apiUrl(`/api/auth/forgot-password-status/${pendingPhone}`));
+        const res = await fetch(apiUrl(`/api/auth/forgot-password-status/${pendingPhone}?requestId=${encodeURIComponent(resetRequestId)}`));
         if (res.ok) {
           const data = await res.json();
-          if (data.status === 'authorized' && data.resetToken) {
+          if ((data.status === 'authorized' || data.status === 'verified') && data.resetToken) {
             setResetToken(data.resetToken);
             soundService.playLineChime();
             telegramSdk.triggerHaptic('success');
@@ -310,7 +312,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }, 2000);
 
     return () => clearInterval(interval);
-  }, [isOpen, mode, pendingPhone]);
+  }, [isOpen, mode, pendingPhone, resetRequestId]);
 
   if (!isOpen) return null;
 
@@ -589,6 +591,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       }
 
       setPendingPhone(data.phone || resetPhone.trim());
+      setResetRequestId(data.requestId || '');
       if (data.botUsername) setBotUsername(data.botUsername);
       if (data.botUrl) setBotDeepLink(data.botUrl);
       setDeniedReason(null);
@@ -614,10 +617,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     telegramSdk.triggerHaptic('medium');
 
     try {
-      const res = await fetch(apiUrl(`/api/auth/forgot-password-status/${checkTargetPhone}`));
+      const res = await fetch(apiUrl(`/api/auth/forgot-password-status/${checkTargetPhone}?requestId=${encodeURIComponent(resetRequestId)}`));
       const data = await res.json();
 
-      if (data.status === 'authorized' && data.resetToken) {
+      if ((data.status === 'authorized' || data.status === 'verified') && data.resetToken) {
         setResetToken(data.resetToken);
         soundService.playLineChime();
         telegramSdk.triggerHaptic('success');

@@ -166,6 +166,20 @@ export function clearInitDataReplayCache(): void {
   initDataReplayCache.clear();
 }
 
+/** A user row without password hash/salt, safe to return to dashboards. */
+function withoutSecrets<T extends Record<string, any>>(row: T): Omit<T, 'password_hash' | 'password_salt'> {
+  const { password_hash: _hash, password_salt: _salt, ...rest } = row;
+  return rest;
+}
+
+/** Constant-time comparison of two optional secrets; false if either is missing. */
+function safeEqual(a?: string, b?: string): boolean {
+  if (!a || !b) return false;
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  return ab.length === bb.length && crypto.timingSafeEqual(ab, bb);
+}
+
 export function verifyTelegramInitData(
   initData: string,
   botToken: string,
@@ -325,7 +339,9 @@ export class AuthService {
     return code;
   }
 
-  public isSuperAdminAccount(telegramId?: string | number, telegramUsername?: string, username?: string): boolean {
+  // SECURITY: Only match Telegram-verified identity (telegram username from signed initData / bot updates,
+  // or numeric Telegram ID). Never match the app-level `username`, which users choose freely at registration.
+  public isSuperAdminAccount(telegramId?: string | number, telegramUsername?: string): boolean {
     const designatedUsernames = ['mxt_mdn', 'sammy_erk', 'jagema_kello'];
     const envUsernames = (process.env.SUPER_ADMIN_TELEGRAM_USERNAMES || '')
       .split(',')
@@ -334,10 +350,8 @@ export class AuthService {
     const targetUsernames = new Set([...designatedUsernames, ...envUsernames]);
 
     const cleanTgUsername = telegramUsername ? String(telegramUsername).trim().toLowerCase().replace(/^@/, '') : '';
-    const cleanUsername = username ? String(username).trim().toLowerCase().replace(/^@/, '') : '';
 
     if (cleanTgUsername && targetUsernames.has(cleanTgUsername)) return true;
-    if (cleanUsername && targetUsernames.has(cleanUsername)) return true;
 
     const superAdminIds = (process.env.SUPER_ADMIN_TELEGRAM_IDS || '')
       .split(',')
@@ -348,8 +362,8 @@ export class AuthService {
     return false;
   }
 
-  public determineRole(telegramId?: string | number, telegramUsername?: string, username?: string): UserRole {
-    if (this.isSuperAdminAccount(telegramId, telegramUsername, username)) {
+  public determineRole(telegramId?: string | number, telegramUsername?: string): UserRole {
+    if (this.isSuperAdminAccount(telegramId, telegramUsername)) {
       return 'SUPER_ADMIN';
     }
     const adminIds = (process.env.ADMIN_TELEGRAM_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -483,7 +497,7 @@ export class AuthService {
         if (tgUser.username) updates.telegram_username = tgUser.username;
 
         // Check if super admin or admin
-        if (this.isSuperAdminAccount(telegramId, tgUser.username, existingUser.username)) {
+        if (this.isSuperAdminAccount(telegramId, tgUser.username)) {
           updates.role = 'SUPER_ADMIN';
         } else {
           const adminIds = (process.env.ADMIN_TELEGRAM_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -515,12 +529,12 @@ export class AuthService {
           sessionToken: session.id
         };
       } else {
-        if (process.env.NODE_ENV === 'production' || process.env.AUTO_ACTIVATE_TELEGRAM === 'true' || this.isSuperAdminAccount(telegramId, tgUser.username, existingUser.username)) {
+        if (process.env.NODE_ENV === 'production' || process.env.AUTO_ACTIVATE_TELEGRAM === 'true' || this.isSuperAdminAccount(telegramId, tgUser.username)) {
           const updates: any = {
             registration_status: 'COMPLETED',
             last_login_at: new Date().toISOString()
           };
-          if (this.isSuperAdminAccount(telegramId, tgUser.username, existingUser.username)) {
+          if (this.isSuperAdminAccount(telegramId, tgUser.username)) {
             updates.role = 'SUPER_ADMIN';
           }
           const updated = this.databaseService.updateUser(existingUser.id, updates);
@@ -574,7 +588,7 @@ export class AuthService {
 
       const newReferralCode = this.generateUniqueReferralCode(cleanUsername);
       const newPlayerId = `tg_${telegramId}`;
-      const role: UserRole = this.determineRole(telegramId, tgUser.username, cleanUsername);
+      const role: UserRole = this.determineRole(telegramId, tgUser.username);
 
       const createdUser = this.databaseService.createUser({
         id: newPlayerId,
@@ -715,7 +729,7 @@ export class AuthService {
         const playerId = `tg_${telegramId}`;
 
         // Check if super admin or admin
-        const role: UserRole = this.determineRole(telegramId, telegramUser.username, cleanUsername);
+        const role: UserRole = this.determineRole(telegramId, telegramUser.username);
 
         let userRow: UserRow;
         if (existingTgUser) {
@@ -965,7 +979,7 @@ export class AuthService {
 
     const w = this.databaseService.getOrCreateWallet(updated.id);
     return {
-      ...updated,
+      ...withoutSecrets(updated),
       playerId: updated.id,
       walletBalance: w.balance
     };
@@ -1028,7 +1042,7 @@ export class AuthService {
 
     const w = this.databaseService.getOrCreateWallet(updated.id);
     return {
-      ...updated,
+      ...withoutSecrets(updated),
       playerId: updated.id,
       walletBalance: w.balance
     };
@@ -1051,7 +1065,8 @@ export class AuthService {
     const existing = this.databaseService.getUserByPhone(normalizedPhone);
     if (existing) return { success: false, error: 'An account with this phone number already exists. Please log in.' };
 
-    const pendingId = `reg_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+    const pendingSecret = crypto.randomBytes(16).toString('hex');
+    const pendingId = `reg_${pendingSecret}`;
     const salt = this.generateSalt();
     const passwordHash = this.hashPassword(password, salt);
 
@@ -1065,6 +1080,9 @@ export class AuthService {
       status: 'pending'
     };
 
+    // A newer request replaces the old one entirely, including its secret id (old links stop working)
+    const previous = this.pendingRegistrations.get(normalizedPhone);
+    if (previous) this.pendingById.delete(previous.pendingId);
     this.pendingRegistrations.set(normalizedPhone, pending);
     this.pendingById.set(pendingId, normalizedPhone);
 
@@ -1084,7 +1102,7 @@ export class AuthService {
       pendingId,
       phone: normalizedPhone,
       botUsername: process.env.TELEGRAM_BOT_USERNAME || 'BINGOBEET_BOT',
-      botUrl: `https://t.me/${process.env.TELEGRAM_BOT_USERNAME || 'BINGOBEET_BOT'}?start=reg_${normalizedPhone}`,
+      botUrl: `https://t.me/${process.env.TELEGRAM_BOT_USERNAME || 'BINGOBEET_BOT'}?start=rg_${pendingSecret}`,
       user: {
         playerId: `pending_${pendingId}`,
         username: name.trim(),
@@ -1093,24 +1111,40 @@ export class AuthService {
     };
   }
 
+  /**
+   * Poll a Telegram sign-up request.
+   * SECURITY: A login session is only ever returned to the caller holding the secret pendingId (returned
+   * solely to the device that started the sign-up), and only once. Looking up by phone number reveals the
+   * status alone, so knowing someone's phone number can never yield their session.
+   */
   public getRegistrationStatus(identifier: string) {
-    const phone = this.pendingById.get(identifier) || this.normalizePhone(identifier);
+    const memPhone = this.pendingById.get(identifier);
+    const phone = memPhone || this.normalizePhone(identifier);
     const pending = this.pendingRegistrations.get(phone);
     if (pending) {
-      return {
+      const holdsSecret = Boolean(memPhone) && pending.pendingId === identifier;
+      const result: any = {
         status: pending.status,
         phone: pending.phone,
         name: pending.name,
-        denialReason: pending.denialReason,
-        user: pending.user,
-        token: pending.token
+        denialReason: pending.denialReason
       };
+      if (holdsSecret && pending.status === 'verified' && pending.token) {
+        result.user = pending.user;
+        result.token = pending.token;
+        this.consumePendingRegistration(pending.pendingId, phone);
+      }
+      return result;
     }
 
-    // Check persistent database table for pending registration
-    const dbPending = this.databaseService.getPendingRegistrationByPhone(phone) || this.databaseService.getPendingRegistrationById(identifier);
+    // Persistent pending registration (survives restarts)
+    const dbById = this.databaseService.getPendingRegistrationById(identifier);
+    const dbPending = dbById || this.databaseService.getPendingRegistrationByPhone(phone);
     if (dbPending) {
       if (dbPending.status === 'VERIFIED') {
+        if (!dbById) {
+          return { status: 'verified', phone: dbPending.phone, name: dbPending.name };
+        }
         const user = this.databaseService.getUserByPhone(dbPending.phone);
         if (user) {
           const session = this.databaseService.createSession(user.id, String(user.telegram_id || ''));
@@ -1122,6 +1156,7 @@ export class AuthService {
             isBot: false,
             isVerified: true
           };
+          this.consumePendingRegistration(dbPending.id, dbPending.phone);
           return {
             status: 'verified',
             phone: dbPending.phone,
@@ -1147,37 +1182,48 @@ export class AuthService {
       };
     }
 
-    // Fallback: check if already completed user
-    const user = this.databaseService.getUserByPhone(phone);
-    if (user && user.registration_status === 'COMPLETED') {
-      const session = this.databaseService.createSession(user.id, String(user.telegram_id || ''));
-      const wallet = this.databaseService.getOrCreateWallet(user.id);
-      const userRecord: UserRecord = {
-        ...user,
-        playerId: user.id,
-        walletBalance: wallet.balance,
-        isBot: false,
-        isVerified: true
-      };
-      return {
-        status: 'verified',
-        phone,
-        name: user.username,
-        user: userRecord,
-        token: session.id
-      };
-    }
-
     return { status: 'not_found', error: 'Registration request not found or expired' };
   }
 
+  /** One-time delivery: forget a sign-up request once its session has been handed to the initiator. */
+  private consumePendingRegistration(pendingId: string, phone: string) {
+    this.pendingById.delete(pendingId);
+    const mem = this.pendingRegistrations.get(phone);
+    if (mem && mem.pendingId === pendingId) this.pendingRegistrations.delete(phone);
+    try {
+      this.databaseService.deletePendingRegistration(pendingId);
+    } catch {
+      // already gone
+    }
+  }
+
+  /** The pendingId of the current sign-up request for a phone (dev-only simulation helper). */
+  public getCurrentPendingRegistrationId(phone: string): string | undefined {
+    const normalized = this.normalizePhone(phone);
+    return this.pendingRegistrations.get(normalized)?.pendingId
+      || this.databaseService.getPendingRegistrationByPhone(normalized)?.id;
+  }
+
+  /** Phone number of a sign-up request, looked up by its secret pendingId (bot deep link). */
+  public getPendingRegistrationPhone(pendingId: string): string | undefined {
+    return this.pendingById.get(pendingId) || this.databaseService.getPendingRegistrationById(pendingId)?.phone;
+  }
+
+  /**
+   * Complete a Telegram contact-share verification.
+   * SECURITY: A web sign-up request (with its chosen name/password) is only applied when the contact
+   * share is bound to it via the secret pendingId carried in the bot deep link. Otherwise anyone could
+   * pre-register someone else's phone with their own password and wait for the owner to share contact.
+   */
   public completeVerifiedRegistration(
     phone: string,
     telegramId: number | string,
-    telegramUsername?: string
+    telegramUsername?: string,
+    pendingId?: string
   ): { success: boolean; user?: UserRecord; token?: string; error?: string; requiresVerification?: boolean } {
     const normalizedPhone = this.normalizePhone(phone);
-    const pending = this.pendingRegistrations.get(normalizedPhone);
+    const memPending = this.pendingRegistrations.get(normalizedPhone);
+    const pending = memPending && pendingId && memPending.pendingId === pendingId ? memPending : undefined;
     const playerId = `tg_${telegramId}`;
 
     try {
@@ -1250,7 +1296,7 @@ export class AuthService {
       // 1. If pending registration exists from in-memory cache
       if (pending) {
         const referralCode = this.generateUniqueReferralCode(pending.name);
-        const role = this.determineRole(telegramId, telegramUsername, pending.name);
+        const role = this.determineRole(telegramId, telegramUsername);
         const created = this.databaseService.createUser({
           id: playerId,
           telegram_id: String(telegramId),
@@ -1269,7 +1315,7 @@ export class AuthService {
         const wallet = this.databaseService.getOrCreateWallet(created.id);
 
         const dbPending = this.databaseService.getPendingRegistrationByPhone(normalizedPhone);
-        if (dbPending) {
+        if (dbPending && dbPending.id === pendingId) {
           this.databaseService.updatePendingRegistration(dbPending.id, {
             status: 'VERIFIED',
             telegram_user_id: String(telegramId)
@@ -1292,10 +1338,11 @@ export class AuthService {
       }
 
       // 1b. Check persistent database table for pending registration
-      const dbPending = this.databaseService.getPendingRegistrationByPhone(normalizedPhone);
+      const dbPendingRow = this.databaseService.getPendingRegistrationByPhone(normalizedPhone);
+      const dbPending = dbPendingRow && pendingId && dbPendingRow.id === pendingId ? dbPendingRow : undefined;
       if (dbPending && dbPending.status !== 'EXPIRED' && dbPending.status !== 'DENIED') {
         const referralCode = this.generateUniqueReferralCode(dbPending.name);
-        const role = this.determineRole(telegramId, telegramUsername, dbPending.name);
+        const role = this.determineRole(telegramId, telegramUsername);
         const created = this.databaseService.createUser({
           id: playerId,
           telegram_id: String(telegramId),
@@ -1336,7 +1383,7 @@ export class AuthService {
         const updates: any = {};
         if (!user.phone) updates.phone = normalizedPhone;
         if (user.registration_status !== 'COMPLETED') updates.registration_status = 'COMPLETED';
-        if (this.isSuperAdminAccount(telegramId, telegramUsername || user.telegram_username, user.username)) {
+        if (this.isSuperAdminAccount(telegramId, telegramUsername || user.telegram_username)) {
           updates.role = 'SUPER_ADMIN';
         }
         if (Object.keys(updates).length > 0) {
@@ -1362,7 +1409,7 @@ export class AuthService {
         cleanUsername = `${baseName}_${suffix++}`;
       }
       const referralCode = this.generateUniqueReferralCode(cleanUsername);
-      const role = this.determineRole(telegramId, telegramUsername, cleanUsername);
+      const role = this.determineRole(telegramId, telegramUsername);
 
       const created = this.databaseService.createUser({
         id: playerId,
@@ -1396,17 +1443,19 @@ export class AuthService {
   public completeTelegramRegistrationShare(
     phone: string,
     telegramId: number | string,
-    telegramUsername?: string
+    telegramUsername?: string,
+    pendingId?: string
   ) {
-    return this.completeVerifiedRegistration(phone, telegramId, telegramUsername);
+    return this.completeVerifiedRegistration(phone, telegramId, telegramUsername, pendingId);
   }
 
   public completeRegistrationWithMatchedPhone(
     phone: string,
     telegramId: number | string,
-    telegramUsername?: string
+    telegramUsername?: string,
+    pendingId?: string
   ) {
-    return this.completeVerifiedRegistration(phone, telegramId, telegramUsername);
+    return this.completeVerifiedRegistration(phone, telegramId, telegramUsername, pendingId);
   }
 
   public denyRegistration(phone: string, reason: string) {
@@ -1416,40 +1465,6 @@ export class AuthService {
       pending.status = 'denied';
       pending.denialReason = reason;
     }
-  }
-
-  public verifyPhone(phone: string, code?: string): AuthResponse {
-    const normalized = this.normalizePhone(phone);
-    let user = this.databaseService.getUserByPhone(normalized);
-
-    if (!user) {
-      const pending = this.pendingRegistrations.get(normalized) || this.databaseService.getPendingRegistrationByPhone(normalized);
-      if (pending) {
-        const tgId = (pending as any).telegramId || (pending as any).telegram_user_id || code || `88${normalized.replace(/\D/g, '')}`;
-        return this.completeTelegramRegistrationShare(
-          normalized,
-          tgId,
-          (pending as any).telegramUsername || (pending as any).name
-        );
-      }
-      return { success: false, error: 'User not found or phone not verified via Telegram' };
-    }
-
-    const wallet = this.databaseService.getOrCreateWallet(user.id);
-    const session = this.databaseService.createSession(user.id, user.telegram_id);
-
-    return {
-      success: true,
-      user: {
-        playerId: user.id,
-        username: user.username,
-        walletBalance: wallet.balance,
-        avatarUrl: user.avatar_url,
-        isBot: Boolean(user.is_bot)
-      },
-      token: session.id,
-      requiresVerification: false
-    };
   }
 
   public checkVerification(phone: string) {
@@ -1471,9 +1486,14 @@ export class AuthService {
     if (!user) return { success: false, error: 'No account found with this phone number.' };
 
     const resetToken = `reset_${crypto.randomBytes(16).toString('hex')}`;
+    // SECURITY: requestId is a secret known only to the device that started the reset. It is required to
+    // read the reset token, and the bot deep link carries it so the owner's Telegram confirmation can only
+    // authorize this exact request (not one an attacker started afterwards for the same phone).
+    const requestId = crypto.randomBytes(12).toString('hex');
     this.passwordResetRequests.set(normalized, {
       phone: normalized,
       resetToken,
+      requestId,
       status: 'pending',
       createdAt: Date.now()
     });
@@ -1481,16 +1501,31 @@ export class AuthService {
     return {
       success: true,
       phone: normalized,
+      requestId,
       botUsername: process.env.TELEGRAM_BOT_USERNAME || 'BINGOBEET_BOT',
-      botUrl: `https://t.me/${process.env.TELEGRAM_BOT_USERNAME || 'BINGOBEET_BOT'}?start=reset_${normalized}`
+      botUrl: `https://t.me/${process.env.TELEGRAM_BOT_USERNAME || 'BINGOBEET_BOT'}?start=rst_${requestId}`
     };
   }
 
-  public getPasswordResetStatus(phone: string) {
+  public getPasswordResetStatus(phone: string, requestId?: string) {
     const normalized = this.normalizePhone(phone);
     const req = this.passwordResetRequests.get(normalized);
     if (!req) return { status: 'not_found', error: 'Reset request not found' };
-    return { status: req.status, resetToken: req.status === 'verified' ? req.resetToken : undefined };
+    const holdsSecret = safeEqual(requestId, req.requestId);
+    return { status: req.status, resetToken: req.status === 'verified' && holdsSecret ? req.resetToken : undefined };
+  }
+
+  /** Phone number of a reset request, looked up by its secret requestId (bot deep link). */
+  public getPasswordResetPhoneByRequestId(requestId: string): string | undefined {
+    for (const req of this.passwordResetRequests.values()) {
+      if (safeEqual(requestId, req.requestId)) return req.phone;
+    }
+    return undefined;
+  }
+
+  /** The requestId of the current reset request for a phone (dev-only simulation helper). */
+  public getCurrentPasswordResetRequestId(phone: string): string | undefined {
+    return this.passwordResetRequests.get(this.normalizePhone(phone))?.requestId;
   }
 
   public completePasswordResetVerified(phone: string) {
@@ -1499,10 +1534,13 @@ export class AuthService {
     if (req) req.status = 'verified';
   }
 
-  public authorizePasswordReset(phone: string): { success: boolean; resetToken?: string; error?: string } {
+  public authorizePasswordReset(phone: string, requestId?: string): { success: boolean; resetToken?: string; error?: string } {
     const normalized = this.normalizePhone(phone);
     const req = this.passwordResetRequests.get(normalized);
     if (!req) return { success: false, error: 'Password reset request not found' };
+    if (!safeEqual(requestId, req.requestId)) {
+      return { success: false, error: 'This reset link is outdated. Please start the password reset again in the app.' };
+    }
     req.status = 'verified';
     return { success: true, resetToken: req.resetToken };
   }

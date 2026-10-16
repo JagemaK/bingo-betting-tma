@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, onTestFinished } from 'vitest';
+import { relaxReferralRules } from './testHelpers.js';
 import { app, httpServer, multiRoomManager } from './index.js';
 import { authService, clearInitDataReplayCache } from './AuthService.js';
 import { ledgerService } from './LedgerService.js';
@@ -321,6 +322,8 @@ describe('Post-Remediation Verification & Launch Gate Test Suite', () => {
     });
 
     it('2.4 Duplicate Referral Commission Claim: Enforces strict idempotency', async () => {
+      const restoreReferralRules = relaxReferralRules();
+      onTestFinished(restoreReferralRules);
       const referee = databaseService.createUser({
         id: `usr_referee_${Date.now()}`,
         telegram_id: `tg_ref_${Date.now()}`,

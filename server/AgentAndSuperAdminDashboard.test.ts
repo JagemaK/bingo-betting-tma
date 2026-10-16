@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { setVerifiedPhone } from './testHelpers.js';
 import { app, httpServer } from './index.js';
 import { authService } from './AuthService.js';
 import { ledgerService } from './LedgerService.js';
@@ -308,13 +309,23 @@ describe('Agent and Super Admin Dashboard Integration Test Suite', () => {
       expect(depositId).toBeDefined();
     });
 
-    it('Agent can assign deposit to self', async () => {
-      const res = await fetch(`${BASE_URL}/api/staff/deposits/${depositId}/assign`, {
+    it('Agent cannot claim a deposit; a Super Admin assigns it to the agent', async () => {
+      const selfRes = await fetch(`${BASE_URL}/api/staff/deposits/${depositId}/assign`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${agentToken}`,
           'Content-Type': 'application/json'
         }
+      });
+      expect(selfRes.status).toBe(403);
+
+      const res = await fetch(`${BASE_URL}/api/staff/deposits/${depositId}/assign`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${superAdminToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ agentId: agentUser.id })
       });
       expect(res.status).toBe(200);
       const data = await res.json();
@@ -381,6 +392,7 @@ describe('Agent and Super Admin Dashboard Integration Test Suite', () => {
       });
       const createData = await createRes.json();
       const rejDepId = createData.deposit.id;
+      databaseService.assignDepositToAgent(rejDepId, agentUser.id);
 
       const balanceBefore = databaseService.getWallet(normalUser.id)!.balance;
 
@@ -416,6 +428,7 @@ describe('Agent and Super Admin Dashboard Integration Test Suite', () => {
     it('Customer requests a withdrawal, reserving balance', async () => {
       const balanceBefore = databaseService.getWallet(normalUser.id)!.balance;
       expect(balanceBefore).toBeGreaterThanOrEqual(500);
+      setVerifiedPhone(normalUser.id, '0911223344');
 
       const res = await fetch(`${BASE_URL}/api/wallet/withdraw`, {
         method: 'POST',

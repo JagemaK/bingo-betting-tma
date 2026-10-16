@@ -119,6 +119,8 @@ describe('Phase 5: Agent & Admin Governance, Role Separation & Backoffice Workfl
       'Telebirr',
       `TX_HTTP_DEP_${Date.now()}`
     );
+    // Simulate agent 1 holding the receiving payment account, so the self-approval guard is what blocks them
+    databaseService.getDb().prepare('UPDATE deposit_requests SET assigned_agent_id = ? WHERE id = ?').run(agent1User.id, deposit.id);
 
     // Agent 1 attempts to approve via API
     const res = await fetch(`${BASE_URL}/api/staff/deposits/${deposit.id}/approve`, {
@@ -133,7 +135,8 @@ describe('Phase 5: Agent & Admin Governance, Role Separation & Backoffice Workfl
     const data = await res.json();
     expect(data.error).toMatch(/Self-approval forbidden/i);
 
-    // Agent 2 can approve it via API
+    // Agent 2 can approve it once a Super Admin assigns it to them
+    databaseService.assignDepositToAgent(deposit.id, agent2User.id);
     const res2 = await fetch(`${BASE_URL}/api/staff/deposits/${deposit.id}/approve`, {
       method: 'POST',
       headers: {

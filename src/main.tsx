@@ -6,8 +6,8 @@ import { AuthProvider } from './services/authContext.js';
 import { apiUrl } from './config/api.js';
 import './index.css';
 
-// Developer manual testing helper in browser console
-if (typeof window !== 'undefined') {
+// Developer manual testing helper in browser console (dev builds only; the backing endpoint is disabled in production)
+if (import.meta.env.DEV && typeof window !== 'undefined') {
   (window as any).testVerify = async (phone: string = '0912345678') => {
     console.log(`%c[DevTest] Simulating Telegram contact match for: ${phone}`, 'color: #0088cc; font-weight: bold;');
     try {

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { setVerifiedPhone } from './testHelpers.js';
 import { io as ClientSocket, Socket as ClientSocketType } from 'socket.io-client';
 import { httpServer, app, multiRoomManager } from './index.js';
 import { authService } from './AuthService.js';
@@ -157,6 +158,40 @@ describe('Multi-User Security & Player Isolation Test Suite (Requirements 17 & 1
     expect(ownRes.status).toBe(200);
     const ownData = await ownRes.json();
     expect(Array.isArray(ownData.entries)).toBe(true);
+  });
+
+  it('TEST 5b: Unauthenticated callers cannot read any balance or ledger by player ID', async () => {
+    const userRes = await fetch(`${BASE_URL}/api/user/${userB.playerId}`);
+    expect(userRes.status).toBe(401);
+    expect((await userRes.json()).user).toBeUndefined();
+
+    const ledgerRes = await fetch(`${BASE_URL}/api/ledger/${userB.playerId}`);
+    expect(ledgerRes.status).toBe(401);
+    expect((await ledgerRes.json()).entries).toBeUndefined();
+  });
+
+  it('TEST 5c: /api/user/sync never returns another existing account', async () => {
+    // Unauthenticated: a supplied playerId is ignored and a fresh guest is created instead
+    const anonRes = await fetch(`${BASE_URL}/api/user/sync`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ playerId: userB.playerId, username: 'Snoop', telegramId: '424242', isBot: true })
+    });
+    expect(anonRes.status).toBe(200);
+    const anonData = await anonRes.json();
+    expect(anonData.user.playerId).not.toBe(userB.playerId);
+    expect(anonData.user.playerId).toMatch(/^usr_guest_/);
+    expect(anonData.user.walletBalance).toBe(0);
+    expect(databaseService.getUserById(anonData.user.playerId)?.account_type).toBe('GUEST');
+
+    // Authenticated: always the caller's own account, regardless of body
+    const authRes = await fetch(`${BASE_URL}/api/user/sync`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenA}` },
+      body: JSON.stringify({ playerId: userB.playerId })
+    });
+    expect(authRes.status).toBe(200);
+    expect((await authRes.json()).user.playerId).toBe(userA.playerId);
   });
 
   // TEST 6: A cannot use B's ticket.
@@ -355,6 +390,7 @@ describe('Multi-User Security & Player Isolation Test Suite (Requirements 17 & 1
   it('TEST 12: Two simultaneous withdrawals cannot double-spend available balance', async () => {
     // Set user A's balance to exactly 100 ETB, with 0 reserved
     databaseService.updateWalletBalance(userA.playerId, 100);
+    setVerifiedPhone(userA.playerId, '0911001122');
 
     // Fire two simultaneous withdrawal requests for 100 ETB each
     const [w1, w2] = await Promise.all([

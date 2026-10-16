@@ -81,8 +81,8 @@ export const WalletModal: React.FC<WalletModalProps> = ({
       const res = await fetch(apiUrl('/api/payment/active-account'));
       if (res.ok) {
         const data = await res.json();
-        if (data.success && data.account) {
-          setActivePaymentAccount(data.account);
+        if (data.success) {
+          setActivePaymentAccount(data.account || null);
         }
       }
     } catch (e) {
@@ -125,9 +125,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
   useEffect(() => {
     if (!socket) return;
     const onActivePayment = (account: PaymentAccount | null) => {
-      if (account) {
-        setActivePaymentAccount(account);
-      }
+      setActivePaymentAccount(account || null);
     };
     socket.on('payment:active', onActivePayment);
     return () => {
@@ -159,7 +157,10 @@ export const WalletModal: React.FC<WalletModalProps> = ({
   const fetchLedger = async () => {
     if (!user?.playerId) return;
     try {
-      const res = await fetch(apiUrl(`/api/ledger/${user.playerId}`));
+      const token = localStorage.getItem('bingo_auth_token');
+      const res = await fetch(apiUrl(`/api/ledger/${user.playerId}`), {
+        headers: token ? { Authorization: `Bearer ${token}` } : {}
+      });
       if (res.ok) {
         const data = await res.json();
         setLedgerEntries(data.entries || []);
@@ -226,7 +227,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
       setErrorMsg(numAmount < 10 ? 'Minimum withdrawal is 10 Birr' : 'Insufficient available balance');
       return;
     }
-    if (!withdrawAddress.trim()) {
+    if (!(user?.phone || withdrawAddress).trim()) {
       soundService.playError();
       setErrorMsg('Please enter your Telebirr phone number (09... or 07...)');
       return;
@@ -246,8 +247,8 @@ export const WalletModal: React.FC<WalletModalProps> = ({
         body: JSON.stringify({
           playerId: user.playerId,
           amount: numAmount,
-          address: withdrawAddress.trim(),
-          withdrawAddress: withdrawAddress.trim()
+          address: (user?.phone || withdrawAddress).trim(),
+          withdrawAddress: (user?.phone || withdrawAddress).trim()
         })
       });
       const data = await res.json();
@@ -479,20 +480,26 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                 </span>
               </div>
 
+              {!activePaymentAccount ? (
+                <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-200">
+                  Deposits are temporarily unavailable. Please contact support or try again later.
+                </div>
+              ) : (
+              <>
               <div className="p-3 rounded-xl bg-[#1a1a1a] border border-white/10 flex items-center justify-between">
                 <div>
                   <div className="text-[9px] font-arcade font-bold text-white/40 uppercase">Send your payment to:</div>
                   <div className="font-arcade font-black text-xl text-[#E8FF00] tracking-wider select-all">
-                    {activePaymentAccount?.phone_number || '0912345678'}
+                    {activePaymentAccount.phone_number}
                   </div>
                   <div className="text-[10px] font-arcade text-white/70 mt-0.5">
-                    Account Name: <strong className="text-white">{activePaymentAccount?.account_name || 'Official Platform Account'}</strong>
+                    Account Name: <strong className="text-white">{activePaymentAccount.account_name}</strong>
                   </div>
                 </div>
                 <button
                   type="button"
                   onClick={() => {
-                    const phoneToCopy = activePaymentAccount?.phone_number || '0912345678';
+                    const phoneToCopy = activePaymentAccount.phone_number;
                     navigator.clipboard.writeText(phoneToCopy);
                     setCopiedPhone(true);
                     soundService.playClick();
@@ -507,11 +514,13 @@ export const WalletModal: React.FC<WalletModalProps> = ({
               </div>
 
               <div className="text-[11px] text-white/70 space-y-1 bg-black/30 p-2.5 rounded-xl border border-white/5">
-                <div>{activePaymentAccount?.instructions || `1. Transfer ${numDeposit} ETB via Telebirr (*127# or Telebirr SuperApp) to the number above.`}</div>
+                <div>{activePaymentAccount.instructions || `1. Transfer ${numDeposit} ETB via Telebirr (*127# or Telebirr SuperApp) to the number above.`}</div>
                 <div className="text-[10px] text-amber-300/90 font-arcade">
                   ● After completing the Telebirr payment, enter your transaction/reference number below.
                 </div>
               </div>
+              </>
+              )}
             </div>
 
             {/* Fast Preset Deposit Buttons */}
@@ -590,7 +599,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
             {/* Deposit CTA */}
             <button
               onClick={handleDeposit}
-              disabled={loading || numDeposit < 10}
+              disabled={loading || numDeposit < 10 || !activePaymentAccount}
               className="btn-neon w-full py-3.5 rounded-2xl text-xs font-arcade font-black uppercase tracking-wide cursor-pointer disabled:opacity-40"
             >
               {loading ? 'PROCESSING...' : `PAY WITH TELEBIRR (${numDeposit} BIRR)`}
@@ -636,11 +645,15 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                 <Phone className="w-4 h-4 text-[#E8FF00]" />
                 <input
                   type="tel"
-                  value={withdrawAddress}
+                  value={user?.phone || withdrawAddress}
+                  readOnly={Boolean(user?.phone)}
                   onChange={(e) => setWithdrawAddress(e.target.value)}
                   placeholder="09xxxxxxxx or 07xxxxxxxx"
                   className="bg-transparent font-arcade text-xs text-white outline-none w-full"
                 />
+              </div>
+              <div className="text-[10px] text-white/50">
+                For your security, payouts go only to your verified number. Contact support to change it.
               </div>
             </div>
 
