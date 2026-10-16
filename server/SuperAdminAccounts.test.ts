@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { DatabaseService } from './DatabaseService.js';
 import { AuthService, createSignedTelegramInitData } from './AuthService.js';
 
@@ -6,36 +6,55 @@ describe('Super Admin Telegram Accounts Designation & Role Delegation', () => {
   let db: DatabaseService;
   let authService: AuthService;
   const mockBotToken = '123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11';
+  const SUPER_ADMIN_IDS = ['99887766', '99887767', '99887768', '11223344', '99112233'];
+  let savedIds: string | undefined;
+  let savedUsernames: string | undefined;
 
   beforeEach(() => {
+    savedIds = process.env.SUPER_ADMIN_TELEGRAM_IDS;
+    savedUsernames = process.env.SUPER_ADMIN_TELEGRAM_USERNAMES;
+    process.env.SUPER_ADMIN_TELEGRAM_IDS = SUPER_ADMIN_IDS.join(',');
     db = new DatabaseService(':memory:');
     authService = new AuthService(db);
   });
 
-  it('correctly identifies designated super admin accounts in isSuperAdminAccount', () => {
-    expect(authService.isSuperAdminAccount(undefined, 'mxt_mdn')).toBe(true);
-    expect(authService.isSuperAdminAccount(undefined, '@mxt_mdn')).toBe(true);
-    expect(authService.isSuperAdminAccount(undefined, 'MXT_MDN')).toBe(true);
-    expect(authService.isSuperAdminAccount(undefined, 'sammy_erk')).toBe(true);
-    expect(authService.isSuperAdminAccount(undefined, '@SAMMY_ERK')).toBe(true);
-    expect(authService.isSuperAdminAccount(undefined, 'jagema_kello')).toBe(true);
-    expect(authService.isSuperAdminAccount(undefined, '@jagema_kello')).toBe(true);
-
-    expect(authService.isSuperAdminAccount(undefined, 'regular_player')).toBe(false);
+  afterEach(() => {
+    if (savedIds === undefined) delete process.env.SUPER_ADMIN_TELEGRAM_IDS;
+    else process.env.SUPER_ADMIN_TELEGRAM_IDS = savedIds;
+    if (savedUsernames === undefined) delete process.env.SUPER_ADMIN_TELEGRAM_USERNAMES;
+    else process.env.SUPER_ADMIN_TELEGRAM_USERNAMES = savedUsernames;
   });
 
-  it('assigns SUPER_ADMIN role when authenticating any designated Telegram account', async () => {
+  it('identifies super admins only by numeric Telegram ID', () => {
+    expect(authService.isSuperAdminAccount('99887766')).toBe(true);
+    expect(authService.isSuperAdminAccount(99887767)).toBe(true);
+    expect(authService.isSuperAdminAccount(' 99887768 ')).toBe(true);
+
+    expect(authService.isSuperAdminAccount('12345')).toBe(false);
+    expect(authService.isSuperAdminAccount(undefined)).toBe(false);
+    expect(authService.isSuperAdminAccount('phone_+251911223344')).toBe(false);
+    // Usernames never confer super admin status, even formerly designated ones
+    expect(authService.isSuperAdminAccount('mxt_mdn')).toBe(false);
+  });
+
+  it('ignores the legacy SUPER_ADMIN_TELEGRAM_USERNAMES env var', () => {
+    process.env.SUPER_ADMIN_TELEGRAM_USERNAMES = 'some_admin';
+    expect(authService.isSuperAdminAccount('some_admin')).toBe(false);
+    expect(authService.determineRole('55555')).toBe('USER');
+  });
+
+  it('assigns SUPER_ADMIN role when authenticating any configured Telegram ID', async () => {
     for (const [id, username] of [
-      [99887766, 'mxt_mdn'],
-      [99887767, 'SAMMY_ERK'],
-      [99887768, 'jagema_kello']
+      [99887766, 'admin_one'],
+      [99887767, undefined],
+      [99887768, 'ADMIN_THREE']
     ] as const) {
       const signedData = createSignedTelegramInitData(
         {
           id,
           first_name: 'Super',
           last_name: 'Admin',
-          username
+          ...(username ? { username } : {})
         },
         mockBotToken
       );
@@ -50,55 +69,79 @@ describe('Super Admin Telegram Accounts Designation & Role Delegation', () => {
     }
   });
 
-  it('elevates existing users with designated usernames during database migration', () => {
-    // Create existing users with 'USER' role
+  it('does not elevate a verified Telegram user whose username matches a formerly designated name', async () => {
+    process.env.AUTO_ACTIVATE_TELEGRAM = 'true';
+    try {
+      const signedData = createSignedTelegramInitData(
+        { id: 44556677, first_name: 'Not', last_name: 'Admin', username: 'mxt_mdn' },
+        mockBotToken
+      );
+      const result = await authService.authenticateTelegram(signedData, mockBotToken);
+      expect(result.success).toBe(true);
+      expect(result.user?.role).toBe('USER');
+    } finally {
+      delete process.env.AUTO_ACTIVATE_TELEGRAM;
+    }
+  });
+
+  it('elevates existing users by Telegram ID (not username) during database migration', () => {
     db.createUser({
-      id: 'existing_sammy',
+      id: 'existing_admin',
       telegram_id: '11223344',
-      telegram_username: 'sammy_erk',
-      username: 'sammy_erk',
+      telegram_username: 'whatever_name',
+      username: 'whatever_name',
       role: 'USER',
-      referral_code: 'REF_SAMMY'
+      referral_code: 'REF_ADMIN'
     });
     db.createUser({
-      id: 'existing_jagema',
-      telegram_id: '11223345',
+      id: 'existing_squatter',
+      telegram_id: '11223399',
       telegram_username: 'jagema_kello',
       username: 'jagema_kello',
       role: 'USER',
-      referral_code: 'REF_JAGEMA'
+      referral_code: 'REF_SQUAT'
     });
 
-    expect(db.getUserById('existing_sammy')?.role).toBe('USER');
-    expect(db.getUserById('existing_jagema')?.role).toBe('USER');
+    expect(db.getUserById('existing_admin')?.role).toBe('USER');
+    expect(db.getUserById('existing_squatter')?.role).toBe('USER');
 
     // Trigger runMigrations check
     (db as any).runMigrations();
 
-    expect(db.getUserById('existing_sammy')?.role).toBe('SUPER_ADMIN');
-    expect(db.getUserById('existing_jagema')?.role).toBe('SUPER_ADMIN');
+    expect(db.getUserById('existing_admin')?.role).toBe('SUPER_ADMIN');
+    expect(db.getUserById('existing_squatter')?.role).toBe('USER');
   });
 
-  it('blocks unverified 1-tap fallback login for designated super admin usernames', () => {
+  it('blocks unverified 1-tap fallback login for configured super admin IDs', () => {
     const res = authService.telegramLogin({
-      id: 55443322,
-      username: 'mxt_mdn',
+      id: 99887766,
+      username: 'anything',
       first_name: 'Attacker'
     });
     expect(res.success).toBe(false);
     expect(res.error).toContain('Admin authorization requires verified Telegram WebApp initData');
   });
 
-  it('assigns SUPER_ADMIN role on direct contact share verification for designated username', async () => {
+  it('assigns SUPER_ADMIN role on direct contact share verification for a configured Telegram ID', async () => {
     const res = await authService.completeVerifiedRegistration(
       '0911002233',
       99112233,
-      'sammy_erk'
+      'any_username'
     );
     expect(res.success).toBe(true);
     expect(res.user?.role).toBe('SUPER_ADMIN');
     const persisted = db.getUserById(res.user!.playerId);
     expect(persisted?.role).toBe('SUPER_ADMIN');
+  });
+
+  it('does not assign SUPER_ADMIN on contact share for an unconfigured ID with a formerly designated username', async () => {
+    const res = await authService.completeVerifiedRegistration(
+      '0911002244',
+      77001122,
+      'sammy_erk'
+    );
+    expect(res.success).toBe(true);
+    expect(res.user?.role).toBe('USER');
   });
 
   it('allows super admin to change another user role to AGENT', () => {

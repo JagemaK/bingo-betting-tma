@@ -325,31 +325,24 @@ export class AuthService {
     return code;
   }
 
-  public isSuperAdminAccount(telegramId?: string | number, telegramUsername?: string, username?: string): boolean {
-    const designatedUsernames = ['mxt_mdn', 'sammy_erk', 'jagema_kello'];
-    const envUsernames = (process.env.SUPER_ADMIN_TELEGRAM_USERNAMES || '')
-      .split(',')
-      .map(s => s.trim().toLowerCase().replace(/^@/, ''))
-      .filter(Boolean);
-    const targetUsernames = new Set([...designatedUsernames, ...envUsernames]);
-
-    const cleanTgUsername = telegramUsername ? String(telegramUsername).trim().toLowerCase().replace(/^@/, '') : '';
-    const cleanUsername = username ? String(username).trim().toLowerCase().replace(/^@/, '') : '';
-
-    if (cleanTgUsername && targetUsernames.has(cleanTgUsername)) return true;
-    if (cleanUsername && targetUsernames.has(cleanUsername)) return true;
-
+  /**
+   * Super-admin status is granted ONLY by immutable Telegram numeric ID
+   * (SUPER_ADMIN_TELEGRAM_IDS). Usernames are user-chosen (or mutable on Telegram)
+   * and must never confer privileges.
+   */
+  public isSuperAdminAccount(telegramId?: string | number): boolean {
+    if (telegramId === undefined || telegramId === null) return false;
+    const cleanId = String(telegramId).trim();
+    if (!/^\d+$/.test(cleanId)) return false;
     const superAdminIds = (process.env.SUPER_ADMIN_TELEGRAM_IDS || '')
       .split(',')
       .map(s => s.trim())
       .filter(Boolean);
-    if (telegramId && superAdminIds.includes(String(telegramId))) return true;
-
-    return false;
+    return superAdminIds.includes(cleanId);
   }
 
-  public determineRole(telegramId?: string | number, telegramUsername?: string, username?: string): UserRole {
-    if (this.isSuperAdminAccount(telegramId, telegramUsername, username)) {
+  public determineRole(telegramId?: string | number): UserRole {
+    if (this.isSuperAdminAccount(telegramId)) {
       return 'SUPER_ADMIN';
     }
     const adminIds = (process.env.ADMIN_TELEGRAM_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -483,7 +476,7 @@ export class AuthService {
         if (tgUser.username) updates.telegram_username = tgUser.username;
 
         // Check if super admin or admin
-        if (this.isSuperAdminAccount(telegramId, tgUser.username, existingUser.username)) {
+        if (this.isSuperAdminAccount(telegramId)) {
           updates.role = 'SUPER_ADMIN';
         } else {
           const adminIds = (process.env.ADMIN_TELEGRAM_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -515,12 +508,12 @@ export class AuthService {
           sessionToken: session.id
         };
       } else {
-        if (process.env.NODE_ENV === 'production' || process.env.AUTO_ACTIVATE_TELEGRAM === 'true' || this.isSuperAdminAccount(telegramId, tgUser.username, existingUser.username)) {
+        if (process.env.NODE_ENV === 'production' || process.env.AUTO_ACTIVATE_TELEGRAM === 'true' || this.isSuperAdminAccount(telegramId)) {
           const updates: any = {
             registration_status: 'COMPLETED',
             last_login_at: new Date().toISOString()
           };
-          if (this.isSuperAdminAccount(telegramId, tgUser.username, existingUser.username)) {
+          if (this.isSuperAdminAccount(telegramId)) {
             updates.role = 'SUPER_ADMIN';
           }
           const updated = this.databaseService.updateUser(existingUser.id, updates);
@@ -564,7 +557,7 @@ export class AuthService {
 
     // In production, when AUTO_ACTIVATE_TELEGRAM is enabled, or for Super Admin accounts:
     // Auto-create and authenticate brand new Telegram users with zero friction
-    if (process.env.NODE_ENV === 'production' || process.env.AUTO_ACTIVATE_TELEGRAM === 'true' || this.isSuperAdminAccount(telegramId, tgUser.username)) {
+    if (process.env.NODE_ENV === 'production' || process.env.AUTO_ACTIVATE_TELEGRAM === 'true' || this.isSuperAdminAccount(telegramId)) {
       const baseUsername = (tgUser.username || tgUser.first_name || `Player_${telegramId.slice(-4)}`).replace(/[^a-zA-Z0-9_]/g, '_');
       let cleanUsername = baseUsername;
       let suffix = 1;
@@ -574,7 +567,7 @@ export class AuthService {
 
       const newReferralCode = this.generateUniqueReferralCode(cleanUsername);
       const newPlayerId = `tg_${telegramId}`;
-      const role: UserRole = this.determineRole(telegramId, tgUser.username, cleanUsername);
+      const role: UserRole = this.determineRole(telegramId);
 
       const createdUser = this.databaseService.createUser({
         id: newPlayerId,
@@ -715,7 +708,7 @@ export class AuthService {
         const playerId = `tg_${telegramId}`;
 
         // Check if super admin or admin
-        const role: UserRole = this.determineRole(telegramId, telegramUser.username, cleanUsername);
+        const role: UserRole = this.determineRole(telegramId);
 
         let userRow: UserRow;
         if (existingTgUser) {
@@ -1250,7 +1243,7 @@ export class AuthService {
       // 1. If pending registration exists from in-memory cache
       if (pending) {
         const referralCode = this.generateUniqueReferralCode(pending.name);
-        const role = this.determineRole(telegramId, telegramUsername, pending.name);
+        const role = this.determineRole(telegramId);
         const created = this.databaseService.createUser({
           id: playerId,
           telegram_id: String(telegramId),
@@ -1295,7 +1288,7 @@ export class AuthService {
       const dbPending = this.databaseService.getPendingRegistrationByPhone(normalizedPhone);
       if (dbPending && dbPending.status !== 'EXPIRED' && dbPending.status !== 'DENIED') {
         const referralCode = this.generateUniqueReferralCode(dbPending.name);
-        const role = this.determineRole(telegramId, telegramUsername, dbPending.name);
+        const role = this.determineRole(telegramId);
         const created = this.databaseService.createUser({
           id: playerId,
           telegram_id: String(telegramId),
@@ -1336,7 +1329,7 @@ export class AuthService {
         const updates: any = {};
         if (!user.phone) updates.phone = normalizedPhone;
         if (user.registration_status !== 'COMPLETED') updates.registration_status = 'COMPLETED';
-        if (this.isSuperAdminAccount(telegramId, telegramUsername || user.telegram_username, user.username)) {
+        if (this.isSuperAdminAccount(telegramId)) {
           updates.role = 'SUPER_ADMIN';
         }
         if (Object.keys(updates).length > 0) {
@@ -1362,7 +1355,7 @@ export class AuthService {
         cleanUsername = `${baseName}_${suffix++}`;
       }
       const referralCode = this.generateUniqueReferralCode(cleanUsername);
-      const role = this.determineRole(telegramId, telegramUsername, cleanUsername);
+      const role = this.determineRole(telegramId);
 
       const created = this.databaseService.createUser({
         id: playerId,
@@ -1657,7 +1650,7 @@ export class AuthService {
 
     // Security check: NEVER permit admin login through unverified 1-tap fallback
     const adminIds = (process.env.ADMIN_TELEGRAM_IDS || '').split(',').map(s => s.trim());
-    if (adminIds.includes(telegramId) || (user && (user.role === 'ADMIN' || user.role === 'SUPER_ADMIN')) || this.isSuperAdminAccount(telegramId, telegramData.username)) {
+    if (adminIds.includes(telegramId) || (user && (user.role === 'ADMIN' || user.role === 'SUPER_ADMIN')) || this.isSuperAdminAccount(telegramId)) {
       return {
         success: false,
         error: 'Admin authorization requires verified Telegram WebApp initData with HMAC-SHA256 signature'

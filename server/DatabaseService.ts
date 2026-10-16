@@ -800,27 +800,29 @@ export class DatabaseService {
         console.warn('[DatabaseService] Jackpot config seed warning:', seedCfgErr);
       }
 
-      // Automatic elevation of configured Super Admin accounts
+      // Automatic elevation of configured Super Admin accounts.
+      // SECURITY: match ONLY on immutable numeric Telegram IDs. Usernames are user-chosen
+      // (POST /api/auth/register stores any name) and Telegram usernames can be re-claimed,
+      // so they must never grant privileges.
       try {
-        const superAdmins = ['mxt_mdn', 'sammy_erk', 'jagema_kello'];
-        const envAdmins = (process.env.SUPER_ADMIN_TELEGRAM_USERNAMES || '')
-          .split(',')
-          .map(s => s.trim().toLowerCase().replace(/^@/, ''))
-          .filter(Boolean);
-        const allTargetSuperAdmins = Array.from(new Set([...superAdmins, ...envAdmins]));
+        const superAdminIds = Array.from(new Set(
+          (process.env.SUPER_ADMIN_TELEGRAM_IDS || '')
+            .split(',')
+            .map(s => s.trim())
+            .filter(s => /^\d+$/.test(s))
+        ));
 
-        if (allTargetSuperAdmins.length > 0) {
-          const placeholders = allTargetSuperAdmins.map(() => '?').join(',');
+        if (superAdminIds.length > 0) {
+          const placeholders = superAdminIds.map(() => '?').join(',');
           const updateStmt = this.db.prepare(`
             UPDATE users
             SET role = 'SUPER_ADMIN'
-            WHERE (LOWER(REPLACE(telegram_username, '@', '')) IN (${placeholders})
-               OR LOWER(REPLACE(username, '@', '')) IN (${placeholders}))
+            WHERE telegram_id IN (${placeholders})
               AND role != 'SUPER_ADMIN'
           `);
-          const res = updateStmt.run(...allTargetSuperAdmins, ...allTargetSuperAdmins);
+          const res = updateStmt.run(...superAdminIds);
           if (res.changes > 0) {
-            console.log(`[DatabaseService] Elevated ${res.changes} account(s) to SUPER_ADMIN: ${allTargetSuperAdmins.join(', ')}`);
+            console.log(`[DatabaseService] Elevated ${res.changes} account(s) to SUPER_ADMIN by Telegram ID`);
           }
         }
       } catch (adminErr) {
