@@ -389,12 +389,14 @@ app.post('/api/auth/register', authEndpointRateLimitMiddleware, async (req, res)
 });
 
 // Upgrade Guest Account to Real Account
-app.post('/api/auth/upgrade-guest', authEndpointRateLimitMiddleware, optionalSession, (req: any, res) => {
-  const guestPlayerId = req.body.guestPlayerId || req.body.playerId || req.user?.playerId || req.user?.id;
+// SECURITY: The guest identity comes solely from the caller's session. A client-supplied guestPlayerId
+// is never trusted, otherwise anyone who learns a guest ID could claim that account.
+app.post('/api/auth/upgrade-guest', authEndpointRateLimitMiddleware, authenticateSession, (req: any, res) => {
+  const guestPlayerId = req.user.playerId;
   const { phone, password, name } = req.body;
 
-  if (!guestPlayerId || !phone || !password) {
-    return res.status(400).json({ error: 'guestPlayerId, phone, and password are required.' });
+  if (!phone || !password) {
+    return res.status(400).json({ error: 'phone and password are required.' });
   }
 
   const result = authService.upgradeGuestAccount(guestPlayerId, phone, password, name);

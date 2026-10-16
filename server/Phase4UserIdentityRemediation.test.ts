@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } from 'vitest';
 import http from 'http';
-import { DatabaseService } from './DatabaseService.js';
-import { AuthService } from './AuthService.js';
+import { DatabaseService, databaseService as serverDb } from './DatabaseService.js';
+import { AuthService, authService as authSvcForServer } from './AuthService.js';
 import { normalizeEthiopianPhone, isValidEthiopianPhone, maskPhone, formatLocalPhone } from './PhoneUtils.js';
 import { app } from './index.js';
 
@@ -317,16 +317,34 @@ describe('Phase 4: User Identity, Telegram Integration & Phone Verification Reme
       });
       expect(syncRes.status).toBe(200);
       const guestPlayerId = (await syncRes.json()).user.playerId;
+      const guestRow = serverDb.getUserById(guestPlayerId)!;
+      const guestToken = serverDb.createSession(guestRow.id, guestRow.telegram_id).id;
 
-      // 2. Credit some winnings to guest
-      const db = (app as any).locals?.dbService || dbService;
-      // Use API to upgrade guest
+      // 2. Without the guest's session, the upgrade is rejected even if the guest ID is known
+      const anonRes = await fetch(`${BASE_URL}/api/auth/upgrade-guest`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ guestPlayerId, phone: '0944556678', password: 'attacker_pass_123' })
+      });
+      expect(anonRes.status).toBe(401);
+      expect(serverDb.getUserById(guestPlayerId)?.account_type).toBe('GUEST');
+
+      // 3. Another user's session cannot upgrade the guest either: the body ID is ignored
+      const other = authSvcForServer.register('Other Player', '0944556679', 'other_pass_123');
+      const otherRes = await fetch(`${BASE_URL}/api/auth/upgrade-guest`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${other.token}` },
+        body: JSON.stringify({ guestPlayerId, phone: '0944556680', password: 'attacker_pass_123' })
+      });
+      expect(otherRes.status).toBe(400);
+      expect(serverDb.getUserById(guestPlayerId)?.account_type).toBe('GUEST');
+
+      // 4. The guest's own session upgrades the account
       const upgPhone = '0944556677';
       const upgRes = await fetch(`${BASE_URL}/api/auth/upgrade-guest`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${guestToken}` },
         body: JSON.stringify({
-          guestPlayerId,
           phone: upgPhone,
           password: 'new_valid_password_456',
           name: 'ApiUpgradedUser'
@@ -337,6 +355,7 @@ describe('Phase 4: User Identity, Telegram Integration & Phone Verification Reme
       const upgData = await upgRes.json();
       expect(upgData.success).toBe(true);
       expect(upgData.token).toBeDefined();
+      expect(upgData.user.playerId).toBe(guestPlayerId);
 
       // 3. Authenticate with returned token to GET /api/profile
       const profRes = await fetch(`${BASE_URL}/api/profile`, {
