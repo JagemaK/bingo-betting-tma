@@ -60,3 +60,6 @@ data/*.db-shm
 data/
 *.bak
 .vercel
+
+# Claude Code personal settings
+.claude/settings.local.json
