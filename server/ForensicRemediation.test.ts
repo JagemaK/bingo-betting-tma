@@ -192,7 +192,7 @@ describe('Forensic Remediation Verification Suite', () => {
       expect(init.success).toBe(true);
 
       // 3. Authorize via bot
-      const authReq = auth.authorizePasswordReset(phone);
+      const authReq = auth.authorizePasswordReset(phone, (init as any).requestId);
       expect(authReq.success).toBe(true);
       const resetToken = authReq.resetToken!;
 
@@ -224,8 +224,8 @@ describe('Forensic Remediation Verification Suite', () => {
     it('completePasswordReset rejects short passwords (< 6 chars)', () => {
       const phone = '0955667799';
       auth.register('ShortPass User', phone, 'InitialPass123');
-      auth.initiatePasswordReset(phone);
-      const authReq = auth.authorizePasswordReset(phone);
+      const init = auth.initiatePasswordReset(phone);
+      const authReq = auth.authorizePasswordReset(phone, (init as any).requestId);
 
       const res = auth.completePasswordReset(phone, authReq.resetToken!, '12345');
       expect(res.success).toBe(false);

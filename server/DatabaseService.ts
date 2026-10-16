@@ -2064,6 +2064,7 @@ export class DatabaseService {
         id, phone, name, password_hash, password_salt, telegram_user_id, status, created_at, expires_at
       ) VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?)
       ON CONFLICT(phone) DO UPDATE SET
+        id = excluded.id,
         name = excluded.name,
         password_hash = excluded.password_hash,
         password_salt = excluded.password_salt,

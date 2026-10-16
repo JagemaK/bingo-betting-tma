@@ -473,21 +473,9 @@ app.get('/api/auth/registration-status/:target', (req, res) => {
   res.json(result);
 });
 
-// 2. Verify Phone number via Telegram / Code
-app.post('/api/auth/verify', authEndpointRateLimitMiddleware, (req, res) => {
-  const { phone, code } = req.body;
-  const result = authService.verifyPhone(phone, code);
-  if (!result.success) {
-    return res.status(400).json({ error: result.error });
-  }
-  res.json(result);
-});
-
-// 2b. Check phone verification status (Polling)
-app.get('/api/auth/check-verification/:phone', (req, res) => {
-  const result = authService.checkVerification(req.params.phone);
-  res.json(result);
-});
+// SECURITY: POST /api/auth/verify and GET /api/auth/check-verification/:phone were removed. The first issued
+// a login session for any phone number without checking anything; the second exposed any user's ID and
+// balance by phone number. Phone verification happens only through the Telegram bot contact share.
 
 // 2c. Forgot Password - Initiate
 app.post('/api/auth/forgot-password-initiate', authEndpointRateLimitMiddleware, (req, res) => {
@@ -503,8 +491,10 @@ app.post('/api/auth/forgot-password-initiate', authEndpointRateLimitMiddleware, 
 });
 
 // 2d. Forgot Password - Status Polling
+// The reset token is only returned with the secret requestId from forgot-password-initiate
 app.get('/api/auth/forgot-password-status/:phone', (req, res) => {
-  const result = authService.getPasswordResetStatus(req.params.phone);
+  const requestId = typeof req.query.requestId === 'string' ? req.query.requestId : undefined;
+  const result = authService.getPasswordResetStatus(req.params.phone, requestId);
   res.json(result);
 });
 
