@@ -36,7 +36,10 @@ try {
 } catch (e) {}
 
 // CORS Whitelist and Origin Validator
+// The app is served from the same Render service, so its own public URL must always be allowed: browsers send it
+// as the Origin of the Socket.io handshake, and without it no live updates reach players.
 const allowedOrigins = [
+  'https://bingo-bet-app.onrender.com',
   'https://regions-burns-mile-dim.trycloudflare.com',
   'http://localhost:5173',
   'http://localhost:3001',
@@ -44,13 +47,15 @@ const allowedOrigins = [
   'http://127.0.0.1:3001'
 ];
 
-if (process.env.FRONTEND_URL) {
-  const f = process.env.FRONTEND_URL.replace(/\/+$/, '');
-  if (!allowedOrigins.includes(f)) allowedOrigins.push(f);
-}
-if (process.env.WEBAPP_URL) {
-  const w = process.env.WEBAPP_URL.replace(/\/+$/, '');
-  if (!allowedOrigins.includes(w)) allowedOrigins.push(w);
+for (const name of ['FRONTEND_URL', 'WEBAPP_URL', 'TELEGRAM_WEBAPP_URL', 'RENDER_EXTERNAL_URL']) {
+  const value = process.env[name];
+  if (!value) continue;
+  try {
+    const origin = new URL(value).origin;
+    if (!allowedOrigins.includes(origin)) allowedOrigins.push(origin);
+  } catch {
+    console.warn(`[CORS] Ignoring ${name}: not a valid URL`);
+  }
 }
 if (process.env.ALLOWED_ORIGINS) {
   process.env.ALLOWED_ORIGINS.split(',').forEach((o) => {
