@@ -30,6 +30,14 @@ export interface WinnerRecord {
   patternType: string;
   claimedAtBallIndex: number;
   isBot?: boolean;
+  autoClaimed?: boolean;
+  sharedWith?: number;
+}
+
+export interface PendingClaim {
+  cardNumber: number;
+  username: string;
+  autoClaimed: boolean;
 }
 
 export interface RoomSummary {
@@ -45,7 +53,8 @@ export interface RoomSummary {
   activePlayersCount: number;
   totalCardsSold: number;
   totalCatalogCards: number;
-  minCardsToStart: number;
+  minPlayersToStart: number;
+  maxCardsPerPlayer: number;
   totalPot: number;
   winnerPayoutAmount: number;
   playerPayoutPool: number;
@@ -67,13 +76,20 @@ export interface GameRoomState {
   isCountdownActive?: boolean;
   drawIntervalMs: number;
   totalCatalogCards: number;
-  minCardsToStart: number;
+  minPlayersToStart: number;
+  maxCardsPerPlayer: number;
+  claimWindowMs: number;
+  autoBingoAfterCalls: number;
   commitmentHash: string;
   serverSeedRevealed?: string;
   fullShuffledBallsRevealed?: number[];
   drawnBalls: number[];
   currentBall: { letter: 'B' | 'I' | 'N' | 'G' | 'O'; number: number } | null;
   totalBallsToDraw: number;
+  claimWindowEndsAt: number | null;
+  pendingClaims: PendingClaim[];
+  disqualifiedCardNumbers: number[];
+  roundRefunded: boolean;
   totalCardsSold: number;
   totalPot: number;
   houseRakeAmount: number;

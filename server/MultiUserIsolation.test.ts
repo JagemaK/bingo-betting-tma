@@ -376,6 +376,12 @@ describe('Multi-User Security & Player Isolation Test Suite (Requirements 17 & 1
     const failedClaim = claim1.success ? claim2 : claim1;
     expect(failedClaim.success).toBe(false);
 
+    // The prize is paid when the BINGO claim window closes
+    for (let i = 0; i < 100 && room.winners.length === 0; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    expect(room.winners.length).toBe(1);
+
     // In the ledger and database, verify exactly one payout exists for this ticket
     const ledgerA = ledgerService.getLedgerForUser(userA.playerId);
     const winEntries = ledgerA.filter((e) => (e.ticketId === ticketA.ticketId || (e as any).ticket_id === ticketA.ticketId) && (e.type === 'win_payout' || (e as any).type === 'WIN_PAYOUT'));
@@ -384,7 +390,7 @@ describe('Multi-User Security & Player Isolation Test Suite (Requirements 17 & 1
     const dbClaim = databaseService.getBingoClaim(room.gameId, ticketA.ticketId);
     expect(dbClaim).toBeDefined();
     expect(dbClaim?.user_id).toBe(userA.playerId);
-  });
+  }, 20000);
 
   // TEST 12: Two simultaneous withdrawals cannot spend the same funds.
   it('TEST 12: Two simultaneous withdrawals cannot double-spend available balance', async () => {

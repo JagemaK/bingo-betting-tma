@@ -25,7 +25,7 @@ const defaultRoomConfig: RoomConfig = {
   lobbyDuration: 20,
   drawIntervalMs: 200,
   totalCatalogCards: 200,
-  minCardsToStart: 5
+  minPlayersToStart: 5
 };
 
 describe('FINAL END-TO-END SYSTEM VALIDATION', () => {

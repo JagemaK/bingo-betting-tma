@@ -40,15 +40,15 @@ export const BettingDescriptionSection: React.FC<BettingDescriptionSectionProps>
   const faqs = [
     {
       q: 'How does 75-Ball Ethiopian Bingo betting work?',
-      a: 'Players purchase one or more 5×5 cards from our 200-card catalog. Numbers are called live one-by-one from numbers 1 to 75 (B1-15, I16-30, N31-45, G46-60, O61-75). The first player to daub a complete horizontal, vertical, diagonal line, or 4 corners claims BINGO and wins the pooled pari-mutuel jackpot!'
+      a: 'Pick up to 5 numbered cartelas (each number always has the same card). When at least 2 players have joined, a short countdown starts and balls 1 to 75 are called one by one (B1-15, I16-30, N31-45, G46-60, O61-75). Your numbers are marked for you. Finish any row, column, diagonal or the 4 corners and press BINGO. If several cartelas get BINGO on the same ball, the prize is shared equally. A false BINGO puts that cartela out for the round.'
     },
     {
       q: 'How fast are deposits and withdrawals processed with Telebirr & CBE?',
       a: 'Deposits are credited instantly to your in-app wallet via Telebirr or Commercial Bank of Ethiopia (CBE). Withdrawals are automated and sent directly to your registered mobile phone number within 1 to 5 minutes with zero withdrawal commission.'
     },
     {
-      q: 'What is the 5-Player Zero Rake Promo?',
-      a: 'We believe in giving back to our community! Whenever a room begins with exactly 5 players, the house takes 0% platform rake. 100% of all ticket stakes collected are awarded directly to the winning player.'
+      q: 'What is the small-round Zero Commission Promo?',
+      a: 'Whenever a round has 5 cartelas or fewer, the house takes no commission. 100% of all stakes go to the winner (or are shared between winners on the same ball).'
     },
     {
       q: 'How do I know the game is Provably Fair and not rigged?',
@@ -100,7 +100,7 @@ export const BettingDescriptionSection: React.FC<BettingDescriptionSectionProps>
             </div>
             <div className="flex items-center gap-2 text-xs font-arcade font-bold text-white/80">
               <CheckCircle2 className="w-4 h-4 text-[#E8FF00]" />
-              <span>5-Player Zero Rake Promo</span>
+              <span>Small-Round Zero Commission Promo</span>
             </div>
             <div className="flex items-center gap-2 text-xs font-arcade font-bold text-white/80">
               <CheckCircle2 className="w-4 h-4 text-[#E8FF00]" />
@@ -158,10 +158,10 @@ export const BettingDescriptionSection: React.FC<BettingDescriptionSectionProps>
               <Gift className="w-6 h-6" />
             </div>
             <h4 className="font-arcade font-black text-sm text-white uppercase tracking-wide">
-              5-Player 0% Rake Promo
+              Small-Round 0% Commission Promo
             </h4>
             <p className="text-xs text-white/60 leading-relaxed">
-              When exactly 5 players enter a round, 100% of all ticket stakes go to the winner! The platform takes 0 Birr house rake.
+              When a round has 5 cartelas or fewer, 100% of all stakes go to the winner! The platform takes no commission.
             </p>
           </div>
 
@@ -296,7 +296,7 @@ export const BettingDescriptionSection: React.FC<BettingDescriptionSectionProps>
               <span className="text-xs font-arcade font-black text-[#E8FF00]">80%</span>
             </div>
             <p className="text-xs text-white/50 leading-relaxed">
-              80% of all ticket purchases are bundled directly into the 1st Place winner payout pool. 20% platform rake covers room maintenance and server hosting.
+              80% of all cartela stakes go to the winner (shared equally if several cartelas call BINGO on the same ball). 20% commission covers room maintenance and server hosting.
             </p>
           </div>
 
@@ -309,7 +309,7 @@ export const BettingDescriptionSection: React.FC<BettingDescriptionSectionProps>
               <span className="text-xs font-arcade font-black text-[#E8FF00]">100%</span>
             </div>
             <p className="text-xs text-white/60 leading-relaxed">
-              When exactly 5 cards enter the round, 100% of all stakes go directly to the winner. Zero commission taken by the platform!
+              When a round has 5 cartelas or fewer, 100% of all stakes go directly to the winner. Zero commission taken by the platform!
             </p>
           </div>
 

@@ -2502,6 +2502,13 @@ io.on('connection', (socket) => {
         return;
       }
 
+      const allowance = room.maxCardsPerPlayer - room.getPlayerCardCount(user.playerId);
+      if (safeCount > allowance) {
+        throw new Error(allowance > 0
+          ? `You can add ${allowance} more cartela${allowance === 1 ? '' : 's'} this round (max ${room.maxCardsPerPlayer})`
+          : `You already hold the maximum of ${room.maxCardsPerPlayer} cartelas this round`);
+      }
+
       const tickets = [];
       for (let i = 0; i < safeCount; i++) {
         const ticket = await room.pickRandomCardForUser(user.playerId, user.username);

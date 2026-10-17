@@ -25,8 +25,8 @@ interface TopHeaderProps {
   stakeFormatted?: string;
   countdownTimer?: string;
   isCountdownActive?: boolean;
-  totalCardsSold?: number;
-  minCardsToStart?: number;
+  activePlayersCount?: number;
+  minPlayersToStart?: number;
   autoDaub?: boolean;
   soundEnabled?: boolean;
   onToggleAutoDaub?: () => void;
@@ -51,8 +51,8 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
   stakeFormatted,
   countdownTimer,
   isCountdownActive = false,
-  totalCardsSold = 0,
-  minCardsToStart = 5,
+  activePlayersCount = 0,
+  minPlayersToStart = 2,
   autoDaub,
   soundEnabled = true,
   onToggleAutoDaub,
@@ -257,7 +257,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
                 }`}
               >
                 <Clock className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-[#E8FF00] shrink-0" />
-                <span>{isCountdownActive ? (countdownTimer || '0:20') : `${totalCardsSold}/${minCardsToStart}`}</span>
+                <span>{isCountdownActive ? (countdownTimer || '0:30') : `${activePlayersCount}/${minPlayersToStart} players`}</span>
               </div>
               <WalletPill />
             </div>

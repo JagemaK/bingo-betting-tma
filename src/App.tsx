@@ -150,6 +150,21 @@ export default function App() {
 
   useEffect(() => stopPendingWalletWatch, [stopPendingWalletWatch]);
 
+  // Local deadline for the BINGO claim window (measured from when this device saw it open, so clock skew doesn't matter)
+  const [claimDeadline, setClaimDeadline] = useState<number | null>(null);
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  const claimWindowKey = gameState?.status === 'active' ? gameState?.claimWindowEndsAt ?? null : null;
+  useEffect(() => {
+    if (!claimWindowKey) {
+      setClaimDeadline(null);
+      return;
+    }
+    setClaimDeadline(Date.now() + (gameState?.claimWindowMs ?? 5000));
+    setNowTick(Date.now());
+    const t = setInterval(() => setNowTick(Date.now()), 250);
+    return () => clearInterval(t);
+  }, [claimWindowKey]);
+
   useEffect(() => {
     if (!walletNotice) return;
     const t = setTimeout(() => setWalletNotice(null), 8000);
@@ -479,21 +494,45 @@ export default function App() {
       }
     });
 
+    s.on('BINGO_CALLED', (data: { roomId: string; cardNumber: number; username: string; autoClaimed: boolean }) => {
+      soundService.playLineChime();
+      telegramSdk.triggerHaptic('heavy');
+    });
+
+    s.on('BINGO_FALSE_CLAIM', (data: { roomId: string; cardNumber: number; username: string }) => {
+      if (userRef.current && data.username !== userRef.current.username) {
+        setWalletNotice({ tone: 'error', text: `False BINGO: Card #${data.cardNumber} is out of this round.` });
+      }
+    });
+
     s.on('GAME_STARTED', () => {
       soundService.playLineChime();
       telegramSdk.triggerHaptic('medium');
       setCurrentView('live_game');
     });
 
-    s.on('BINGO_WINNER_ANNOUNCED', (data: { winner: WinnerRecord; payoutAmount: number }) => {
-      setRecentWinAnnouncement(data.winner);
-
+    s.on('BINGO_WINNER_ANNOUNCED', (data: { winner: WinnerRecord; winners?: WinnerRecord[]; payoutAmount: number }) => {
+      const winners = data.winners && data.winners.length > 0 ? data.winners : [data.winner];
       // STRICT USER ISOLATION: Derive winner match ONLY from authenticated user
-      const isMe = Boolean(
-        userRef.current && data.winner.playerId === userRef.current.playerId
-      );
+      const myWins = winners.filter((w) => userRef.current && w.playerId === userRef.current.playerId);
+      const isMe = myWins.length > 0;
+      const headline = isMe ? myWins[0] : winners[0];
+      setRecentWinAnnouncement({
+        ...headline,
+        username: winners.length > 1 ? `${headline.username} +${winners.length - 1} more` : headline.username,
+        payoutAmount: isMe ? myWins.reduce((sum, w) => sum + w.payoutAmount, 0) : headline.payoutAmount
+      });
 
+      // Replace the "results in a moment" notice from a pending claim with the outcome
+      setWalletNotice((prev) => (prev?.text.startsWith('BINGO!') ? null : prev));
       if (isMe) {
+        const won = myWins.reduce((sum, w) => sum + w.payoutAmount, 0);
+        setWalletNotice({
+          tone: 'success',
+          text: winners.length > 1
+            ? `You won ${won.toLocaleString()} Birr! ${winners.length} cartelas had BINGO on this ball, so the prize was shared.`
+            : `You won ${won.toLocaleString()} Birr!`
+        });
         soundService.playJackpotFanfare();
         telegramSdk.triggerHaptic('success');
         confetti({
@@ -501,18 +540,7 @@ export default function App() {
           spread: 90,
           origin: { y: 0.6 }
         });
-        // Sync user wallet balance immediately
-        if (userRef.current) {
-          const t = auth.sessionToken || localStorage.getItem('bingo_auth_token');
-          fetch(apiUrl(`/api/user/${userRef.current.playerId}`), {
-            headers: t ? { Authorization: `Bearer ${t}` } : {}
-          })
-            .then((res) => res.json())
-            .then((d) => {
-              if (d.user) setUser(d.user);
-            })
-            .catch(console.error);
-        }
+        refreshUserBalance();
       } else {
         // Someone else won! Notify with pleasant chime, no false celebration
         soundService.playLineChime();
@@ -524,11 +552,15 @@ export default function App() {
       }, 7000);
     });
 
-    s.on('GAME_FINISHED', (data: { roomId: string; gameId: string; winners: WinnerRecord[]; serverSeedRevealed?: string; fullShuffledBallsRevealed?: number[] }) => {
+    s.on('GAME_FINISHED', (data: { roomId: string; gameId: string; winners: WinnerRecord[]; refunded?: boolean; serverSeedRevealed?: string; fullShuffledBallsRevealed?: number[] }) => {
       // STRICT USER ISOLATION: Check only authenticated user
       const didIWin = Boolean(
         userRef.current && data.winners.some((w) => w.playerId === userRef.current?.playerId)
       );
+      if (userRef.current && (didIWin || data.refunded)) refreshUserBalance();
+      if (data.refunded) {
+        setWalletNotice({ tone: 'success', text: 'No winner this round, so every stake was refunded.' });
+      }
 
       if (didIWin) {
         soundService.playJackpotFanfare();
@@ -543,6 +575,9 @@ export default function App() {
             ...prev,
             status: 'finished',
             winners: data.winners,
+            roundRefunded: Boolean(data.refunded),
+            claimWindowEndsAt: null,
+            pendingClaims: [],
             serverSeedRevealed: data.serverSeedRevealed,
             fullShuffledBallsRevealed: data.fullShuffledBallsRevealed
           };
@@ -999,13 +1034,17 @@ export default function App() {
     }, (res: any) => {
       setClaimingTicketId(null);
       if (res.success) {
-        soundService.playJackpotFanfare();
         telegramSdk.triggerHaptic('success');
+        if (res.pending) {
+          setWalletNotice({ tone: 'success', text: res.message || 'BINGO verified! Results in a moment.' });
+        } else {
+          soundService.playJackpotFanfare();
+        }
         if (res.user) setUser(res.user);
       } else {
         soundService.playError();
         setErrorMessage(res.message || 'Verification failed');
-        setTimeout(() => setErrorMessage(null), 4000);
+        setTimeout(() => setErrorMessage(null), 6000);
       }
     });
   };
@@ -1037,7 +1076,16 @@ export default function App() {
 
   const activeTicket = userTickets[activeCardIndex] || userTickets[0] || null;
   const activeWinStatus = activeTicket ? checkTicketWinStatus(activeTicket) : { hasWon: false, winningNumbers: new Set<number>() };
-  const anyWinningTicket = userTickets.find((t) => checkTicketWinStatus(t).hasWon);
+  const disqualifiedCards = new Set(gameState?.disqualifiedCardNumbers || []);
+  const claimedCards = new Set((gameState?.pendingClaims || []).map((c) => c.cardNumber));
+  const anyWinningTicket = userTickets.find(
+    (t) => !disqualifiedCards.has(t.cardNumber ?? -1) && !claimedCards.has(t.cardNumber ?? -1) && checkTicketWinStatus(t).hasWon
+  );
+  const claimWindowOpen = gameState?.status === 'active' && Boolean(gameState?.claimWindowEndsAt);
+  const claimWindowSecondsLeft = claimWindowOpen
+    ? Math.max(0, Math.ceil(((claimDeadline ?? nowTick) - nowTick) / 1000))
+    : 0;
+  const myPendingClaims = (gameState?.pendingClaims || []).filter((c) => myTicketCardNumbers.includes(c.cardNumber));
 
   return (
     <div className="min-h-screen w-full bg-[#080808] text-white flex flex-col font-sans selection:bg-[#E8FF00] selection:text-black">
@@ -1145,6 +1193,28 @@ export default function App() {
               </div>
             )}
 
+            {/* BINGO called: draw paused while other BINGOs on this ball can join */}
+            {claimWindowOpen && (
+              <div role="status" className="p-3.5 rounded-2xl text-xs bg-[#E8FF00]/15 border border-[#E8FF00]/50 text-[#E8FF00] shadow-[0_0_18px_rgba(232,255,0,0.2)]">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="font-arcade font-black uppercase tracking-wide">
+                    BINGO! Draw paused · {claimWindowSecondsLeft}s
+                  </div>
+                  <Crown className="w-5 h-5 shrink-0" />
+                </div>
+                <div className="mt-1 text-white/90">
+                  {(gameState?.pendingClaims || []).map((c) => `Card #${c.cardNumber} (${c.username}${c.autoClaimed ? ', auto' : ''})`).join(' · ')}
+                </div>
+                <div className="mt-1 text-white/60">
+                  {myPendingClaims.length > 0
+                    ? 'Your BINGO is in. If anyone else also has BINGO now, the prize is shared equally.'
+                    : anyWinningTicket
+                      ? 'You have BINGO too! Press the button below now to share the prize.'
+                      : 'Anyone else with BINGO can still press now to share the prize.'}
+                </div>
+              </div>
+            )}
+
             {/* Winner Announcement Banner */}
             {recentWinAnnouncement && (
               <div className="p-3.5 rounded-2xl font-semibold text-xs flex items-center justify-between bg-gradient-to-r from-amber-500/20 via-pink-500/15 to-purple-500/20 border border-amber-400/40 border-t-white/50 backdrop-blur-xl shadow-glass-md animate-liquid-pulse">
@@ -1166,22 +1236,28 @@ export default function App() {
               <div className="p-4 rounded-3xl space-y-3 text-center bg-white/[0.05] border border-white/15 border-t-white/35 backdrop-blur-xl shadow-glass-md">
                 <div className="flex items-center justify-center gap-2 font-display font-extrabold text-sm uppercase tracking-wide text-amber-300">
                   <Trophy className="w-5 h-5 fill-current" />
-                  <span>Round Complete · All Prizes Awarded</span>
+                  <span>{gameState.roundRefunded ? 'Round Complete · Stakes Refunded' : 'Round Complete · Prize Paid'}</span>
                 </div>
+                {gameState.winners.length > 1 && (
+                  <p className="text-xs text-slate-300">{gameState.winners.length} cartelas called BINGO on the same ball, so the prize was shared equally.</p>
+                )}
                 {gameState.winners.length > 0 ? (
                   <div className="space-y-2 py-1">
                     {gameState.winners.map((w, i) => (
                       <div key={i} className="p-2.5 rounded-xl flex items-center justify-between text-xs bg-white/[0.03] border border-white/[0.08]">
                         <div className="text-left font-semibold text-white">
                           <span>{w.username}</span>
-                          <span className="text-[10px] ml-1.5 font-mono text-amber-400">({w.patternType})</span>
+                          {w.cardNumber ? <span className="text-[10px] ml-1.5 text-slate-400">Card #{w.cardNumber}</span> : null}
+                          <span className="text-[10px] ml-1.5 font-mono text-amber-400">({w.patternType}{w.autoClaimed ? ', auto' : ''})</span>
                         </div>
                         <span className="font-mono font-bold text-emerald-400">+{formatStakeDisplay(w.payoutAmount)}</span>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <p className="text-xs text-slate-400">No winning claims this round.</p>
+                  <p className="text-xs text-slate-400">
+                    {gameState.roundRefunded ? 'No cartela could win this round, so every stake went back to its owner.' : 'No winning claims this round.'}
+                  </p>
                 )}
                 <div className="pt-2 flex items-center justify-between text-xs text-slate-400 border-t border-white/10">
                   <span>Next round countdown starting...</span>
@@ -1233,7 +1309,8 @@ export default function App() {
                 {userTickets.length > 1 && (
                   <div className="flex items-center gap-2 overflow-x-auto pb-1">
                     {userTickets.map((t, idx) => {
-                      const { hasWon } = checkTicketWinStatus(t);
+                      const isOut = disqualifiedCards.has(t.cardNumber ?? -1);
+                      const hasWon = !isOut && checkTicketWinStatus(t).hasWon;
                       return (
                         <button
                           key={t.ticketId}
@@ -1248,7 +1325,8 @@ export default function App() {
                               : 'bg-white/[0.04] text-slate-400 border-white/10 hover:text-white'
                           }`}
                         >
-                          <span>Card #{t.cardNumber || idx + 1}</span>
+                          <span className={isOut ? 'line-through opacity-60' : ''}>Card #{t.cardNumber || idx + 1}</span>
+                          {isOut && <span className="text-[9px] font-bold text-rose-400">OUT</span>}
                           {hasWon && <Flame className="w-3.5 h-3.5 text-rose-400 fill-current animate-bounce" />}
                         </button>
                       );
@@ -1256,6 +1334,11 @@ export default function App() {
                   </div>
                 )}
 
+                {activeTicket && disqualifiedCards.has(activeTicket.cardNumber ?? -1) && (
+                  <div className="p-2.5 rounded-xl text-xs bg-rose-950/70 border border-rose-500/40 text-rose-200">
+                    Card #{activeTicket.cardNumber} is out of this round after a false BINGO. Your other cards still play.
+                  </div>
+                )}
                 {activeTicket ? (
                   <div className="relative">
                     <BingoCard
@@ -1297,7 +1380,9 @@ export default function App() {
                 <span>
                   {claimingTicketId === anyWinningTicket.ticketId
                     ? 'Verifying Claim with Server...'
-                    : `Claim Bingo (Card #${anyWinningTicket.cardNumber || 1}) · Win ${formatStakeDisplay(gameState.winnerPayoutAmount)}!`}
+                    : claimWindowOpen
+                      ? `BINGO! Card #${anyWinningTicket.cardNumber || 1} · Share the prize (${claimWindowSecondsLeft}s)`
+                      : `BINGO! Card #${anyWinningTicket.cardNumber || 1} · Win ${formatStakeDisplay(gameState.winnerPayoutAmount)}`}
                 </span>
               </button>
             ) : (
@@ -1411,7 +1496,14 @@ export default function App() {
           etbEquivalent: 10,
           rakePercent: 20,
           totalCatalogCards: 200,
-          minCardsToStart: 5,
+          minPlayersToStart: 2,
+          maxCardsPerPlayer: 5,
+          claimWindowMs: 5000,
+          autoBingoAfterCalls: 3,
+          claimWindowEndsAt: null,
+          pendingClaims: [],
+          disqualifiedCardNumbers: [],
+          roundRefunded: false,
           status: 'lobby',
           lobbyTimeRemaining: 0,
           lobbyDuration: 20,
@@ -1440,6 +1532,13 @@ export default function App() {
       <HelpRulesModal
         isOpen={activeModal === 'rules'}
         onClose={() => setActiveModal(null)}
+        minPlayers={gameState?.minPlayersToStart}
+        maxCards={gameState?.maxCardsPerPlayer}
+        totalCards={gameState?.totalCatalogCards}
+        lobbySeconds={gameState?.lobbyDuration}
+        claimSeconds={gameState?.claimWindowMs !== undefined ? Math.round(gameState.claimWindowMs / 1000) : undefined}
+        autoCalls={gameState?.autoBingoAfterCalls}
+        commissionPercent={gameState?.rakePercent}
       />
 
       <LeaderboardModal
