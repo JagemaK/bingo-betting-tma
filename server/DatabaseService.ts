@@ -2484,6 +2484,20 @@ export class DatabaseService {
     return row || null;
   }
 
+  /**
+   * The admin form sends '' for "None (Platform-wide)". Store that as NULL, and only accept an existing agent,
+   * so a bad value gets a clear message instead of a FOREIGN KEY error.
+   */
+  private normalizeAssignedAgentId(value: unknown): string | null {
+    if (value === undefined || value === null || String(value).trim() === '') return null;
+    const agentId = String(value).trim();
+    const agent = this.getUserById(agentId);
+    if (!agent || agent.role !== 'AGENT') {
+      throw new Error('The assigned agent was not found. Pick an agent from the list or choose "None".');
+    }
+    return agentId;
+  }
+
   public createPaymentAccount(data: {
     id?: string;
     provider?: string;
@@ -2499,6 +2513,7 @@ export class DatabaseService {
     const isActive = data.is_active !== undefined ? data.is_active : 0;
 
     const phoneNumber = data.phone_number || (data as any).account_number || '';
+    const assignedAgentId = this.normalizeAssignedAgentId(data.assigned_agent_id);
 
     return this.transaction(() => {
       // If setting this account as active, deactivate other accounts
@@ -2513,7 +2528,7 @@ export class DatabaseService {
       `);
       stmt.run(
         id, provider, data.account_name, phoneNumber,
-        data.assigned_agent_id || null, isActive,
+        assignedAgentId, isActive,
         data.instructions || null, now, now
       );
 
@@ -2534,7 +2549,7 @@ export class DatabaseService {
       for (const [key, val] of Object.entries(updates)) {
         if (allowed.includes(key)) {
           fields.push(`${key} = ?`);
-          values.push(val);
+          values.push(key === 'assigned_agent_id' ? this.normalizeAssignedAgentId(val) : val);
         }
       }
 
