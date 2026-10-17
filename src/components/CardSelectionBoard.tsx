@@ -414,10 +414,10 @@ export const CardSelectionBoard: React.FC<CardSelectionBoardProps> = ({
               : 'bg-[#161616] border-white/5 text-white/60'
           }`}>
             <span className="text-[9px] font-arcade font-bold uppercase tracking-wider block">
-              {isCountdownActive ? 'STARTING IN' : 'MIN 5 CARDS'}
+              {isCountdownActive ? 'STARTING IN' : `MIN ${roomState.minCardsToStart ?? 5} CARD${(roomState.minCardsToStart ?? 5) === 1 ? '' : 'S'}`}
             </span>
             <span className="text-xs font-arcade font-black truncate block mt-0.5">
-              {isCountdownActive ? formattedTimer : `${roomState.totalCardsSold} / 5 LOCKED`}
+              {isCountdownActive ? formattedTimer : `${roomState.totalCardsSold} / ${roomState.minCardsToStart ?? 5} LOCKED`}
             </span>
           </div>
         </div>

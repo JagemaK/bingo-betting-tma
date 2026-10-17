@@ -374,7 +374,7 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
                         </div>
                       ) : (
                         <div className="flex items-center gap-1 font-arcade text-xs font-bold px-2.5 py-1 rounded-xl bg-white/5 text-white/70 border border-white/10 whitespace-nowrap">
-                          <span>WAITING ({room.totalCardsSold}/5)</span>
+                          <span>WAITING ({room.totalCardsSold}/{room.minCardsToStart ?? 5})</span>
                         </div>
                       )
                     ) : isDrawing ? (
@@ -415,7 +415,7 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
                   </div>
 
                   <span className={`font-bold shrink-0 ${room.totalCardsSold >= (room.minCardsToStart || 5) ? 'text-[#E8FF00]' : 'text-white/40'}`}>
-                    {room.totalCardsSold >= (room.minCardsToStart || 5) ? 'READY TO DRAW' : 'MIN 5 CARDS'}
+                    {room.totalCardsSold >= (room.minCardsToStart ?? 5) ? 'READY TO DRAW' : `MIN ${room.minCardsToStart ?? 5} CARD${(room.minCardsToStart ?? 5) === 1 ? '' : 'S'}`}
                   </span>
                 </div>
 
