@@ -22,7 +22,7 @@ export const PariMutuelHeader: React.FC<PariMutuelHeaderProps> = ({
     isFivePlayerBonus,
     activePlayersCount,
     totalCardsSold,
-    minCardsToStart = 5
+    minPlayersToStart = 2
   } = gameState;
 
   const winnerAmount = winnerPayoutAmount || playerPayoutPool || totalPot * 0.8;
@@ -31,7 +31,7 @@ export const PariMutuelHeader: React.FC<PariMutuelHeaderProps> = ({
   const houseRakeAmt = Number(((totalPot * houseRakePct) / 100).toFixed(2));
 
   const formatCurrency = (val: number) => `${((val ?? 0)).toLocaleString()} Birr`;
-  const isReady = totalCardsSold >= minCardsToStart;
+  const isReady = activePlayersCount >= minPlayersToStart;
 
   return (
     <div
@@ -44,13 +44,13 @@ export const PariMutuelHeader: React.FC<PariMutuelHeaderProps> = ({
       {/* Laser line highlight */}
       <div className="absolute top-0 inset-x-8 h-[1px] bg-gradient-to-r from-transparent via-[#E8FF00]/40 to-transparent pointer-events-none" />
 
-      {/* 5-Player Special Promo Banner */}
+      {/* Small-round (5 cartelas or fewer) zero-commission banner */}
       {isFivePlayerBonus && totalCardsSold > 0 && (
         <div className="relative z-10 px-3 sm:px-4 py-1.5 flex items-center justify-between bg-[#E8FF00]/15 border-b border-[#E8FF00]/30 min-w-0">
           <div className="flex items-center gap-1.5 min-w-0 flex-1 mr-2">
             <Flame className="w-3.5 h-3.5 text-[#E8FF00] fill-current animate-pulse shrink-0" />
             <span className="font-arcade font-black text-xs text-[#E8FF00] tracking-wider uppercase truncate whitespace-nowrap min-w-0">
-              5-Player Special · 100% Winner Pot!
+              Small Round · 0% Commission · 100% Pot!
             </span>
           </div>
           <span className="text-[9px] font-arcade font-black px-2 py-0.5 rounded-full bg-[#E8FF00] text-black shrink-0 whitespace-nowrap">
@@ -82,19 +82,20 @@ export const PariMutuelHeader: React.FC<PariMutuelHeaderProps> = ({
 
         {/* Player & Card Counter Badges */}
         <div className="flex items-center gap-1 sm:gap-1.5 shrink-0 whitespace-nowrap">
-          <div className="flex items-center gap-1 px-2 sm:px-2.5 py-1 rounded-xl text-xs font-arcade font-bold bg-[#161616] border border-white/10 text-white/80 shrink-0 whitespace-nowrap">
-            <Users className="w-3 h-3 text-[#E8FF00] shrink-0" />
-            <span>{activePlayersCount}P</span>
-          </div>
           <div
             className={`flex items-center gap-1 px-2 sm:px-2.5 py-1 rounded-xl text-xs font-arcade font-bold border shrink-0 whitespace-nowrap ${
               isReady
                 ? 'bg-[#E8FF00]/15 text-[#E8FF00] border-[#E8FF00]/40'
                 : 'bg-[#161616] text-white/60 border-white/10'
             }`}
+            title={`${minPlayersToStart} players needed to start`}
           >
-            <Ticket className="w-3 h-3 shrink-0" />
-            <span>{totalCardsSold}/{minCardsToStart}</span>
+            <Users className="w-3 h-3 shrink-0" />
+            <span>{isReady ? `${activePlayersCount}P` : `${activePlayersCount}/${minPlayersToStart}P`}</span>
+          </div>
+          <div className="flex items-center gap-1 px-2 sm:px-2.5 py-1 rounded-xl text-xs font-arcade font-bold bg-[#161616] border border-white/10 text-white/80 shrink-0 whitespace-nowrap">
+            <Ticket className="w-3 h-3 text-[#E8FF00] shrink-0" />
+            <span>{totalCardsSold}</span>
           </div>
         </div>
       </div>

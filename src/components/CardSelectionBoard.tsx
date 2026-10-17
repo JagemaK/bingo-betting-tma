@@ -113,7 +113,21 @@ export const CardSelectionBoard: React.FC<CardSelectionBoardProps> = ({
   const [isLocking, setIsLocking] = useState<boolean>(false);
 
   const totalCards = roomState.totalCatalogCards || 200;
+  const maxCards = roomState.maxCardsPerPlayer ?? 5;
   const lockedServerCards = new Set(myTicketCardNumbers);
+  const [limitNotice, setLimitNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!limitNotice) return;
+    const t = setTimeout(() => setLimitNotice(null), 3500);
+    return () => clearTimeout(t);
+  }, [limitNotice]);
+
+  const warnCardLimit = () => {
+    soundService.playInvalidClick();
+    telegramSdk.triggerHaptic('warning');
+    setLimitNotice(`You can play up to ${maxCards} cartelas per round.`);
+  };
 
   // Sync timer
   useEffect(() => {
@@ -215,6 +229,10 @@ export const CardSelectionBoard: React.FC<CardSelectionBoardProps> = ({
       soundService.playInvalidClick();
       return;
     }
+    if (lockedServerCards.size >= maxCards) {
+      warnCardLimit();
+      return;
+    }
 
     setIsLocking(true);
     soundService.playLineChime();
@@ -271,6 +289,10 @@ export const CardSelectionBoard: React.FC<CardSelectionBoardProps> = ({
         return next;
       });
     } else {
+      if (selectedCards.size >= maxCards) {
+        warnCardLimit();
+        return;
+      }
       soundService.playClick();
       telegramSdk.triggerHaptic('medium');
       setSelectedCards((prev) => new Set([...Array.from(prev), cardNum]));
@@ -286,6 +308,11 @@ export const CardSelectionBoard: React.FC<CardSelectionBoardProps> = ({
     );
 
     if (available.length === 0) return;
+    count = Math.min(count, maxCards - selectedCards.size);
+    if (count <= 0) {
+      warnCardLimit();
+      return;
+    }
 
     soundService.playLineChime();
     telegramSdk.triggerHaptic('medium');
@@ -362,8 +389,8 @@ export const CardSelectionBoard: React.FC<CardSelectionBoardProps> = ({
         stakeFormatted={stakeFormatted}
         countdownTimer={formattedTimer}
         isCountdownActive={isCountdownActive}
-        totalCardsSold={roomState.totalCardsSold}
-        minCardsToStart={roomState.minCardsToStart || 5}
+        activePlayersCount={roomState.activePlayersCount}
+        minPlayersToStart={roomState.minPlayersToStart ?? 2}
         onBack={onBackToLobby}
         onOpenWallet={onOpenWallet}
         onOpenRules={onOpenRules}
@@ -414,10 +441,10 @@ export const CardSelectionBoard: React.FC<CardSelectionBoardProps> = ({
               : 'bg-[#161616] border-white/5 text-white/60'
           }`}>
             <span className="text-[9px] font-arcade font-bold uppercase tracking-wider block">
-              {isCountdownActive ? 'STARTING IN' : `MIN ${roomState.minCardsToStart ?? 5} CARD${(roomState.minCardsToStart ?? 5) === 1 ? '' : 'S'}`}
+              {isCountdownActive ? 'STARTING IN' : `NEED ${roomState.minPlayersToStart ?? 2} PLAYERS`}
             </span>
             <span className="text-xs font-arcade font-black truncate block mt-0.5">
-              {isCountdownActive ? formattedTimer : `${roomState.totalCardsSold} / ${roomState.minCardsToStart ?? 5} LOCKED`}
+              {isCountdownActive ? formattedTimer : `${roomState.activePlayersCount} / ${roomState.minPlayersToStart ?? 2} JOINED`}
             </span>
           </div>
         </div>
@@ -436,7 +463,7 @@ export const CardSelectionBoard: React.FC<CardSelectionBoardProps> = ({
         )}
 
         {/* ══════════════════════════════════════════════════ */}
-        {/* QUICK QUANTITY SELECTOR (1, 2, 3, 5, 10, RANDOM)   */}
+        {/* QUICK QUANTITY SELECTOR (1..MAX CARTELAS, RANDOM)  */}
         {/* ══════════════════════════════════════════════════ */}
         <div className="p-3.5 rounded-2xl bg-[#111111] border border-white/10 space-y-2.5 shadow-sm">
           <div className="flex items-center justify-between">
@@ -453,11 +480,12 @@ export const CardSelectionBoard: React.FC<CardSelectionBoardProps> = ({
           </div>
 
           <div className="grid grid-cols-5 gap-2">
-            {[1, 2, 3, 5, 10].map((qty) => (
+            {Array.from({ length: Math.min(maxCards, 5) }, (_, i) => i + 1).map((qty) => (
               <button
                 key={qty}
                 onClick={() => handleQuickPick(qty)}
-                className="btn-dark-arcade py-2 text-xs font-arcade font-black rounded-xl hover:border-[#E8FF00]/50 transition-all flex flex-col items-center justify-center cursor-pointer active:scale-95"
+                disabled={qty > maxCards - selectedCount}
+                className="btn-dark-arcade py-2 text-xs font-arcade font-black rounded-xl hover:border-[#E8FF00]/50 transition-all flex flex-col items-center justify-center cursor-pointer active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 <span>+{qty}</span>
                 <span className="text-[8px] text-white/40 font-normal uppercase">
@@ -466,6 +494,12 @@ export const CardSelectionBoard: React.FC<CardSelectionBoardProps> = ({
               </button>
             ))}
           </div>
+          <p className="text-[10px] text-white/50 font-medium">
+            {selectedCount}/{maxCards} cartelas picked · each cartela number always has the same numbers
+          </p>
+          {limitNotice && (
+            <p role="status" className="text-[11px] font-bold text-amber-300">{limitNotice}</p>
+          )}
         </div>
 
         {/* ══════════════════════════════════════════════════ */}
@@ -730,7 +764,7 @@ export const CardSelectionBoard: React.FC<CardSelectionBoardProps> = ({
             ) : selectedCount > 0 ? (
               <>
                 <Check className="w-3.5 h-3.5 sm:w-4 sm:h-4 stroke-[3] shrink-0" />
-                <span>READY ({roomState.totalCardsSold}{roomState.minCardsToStart ? `/${roomState.minCardsToStart}` : ''})</span>
+                <span>{isCountdownActive ? 'READY' : `WAITING ${roomState.activePlayersCount}/${roomState.minPlayersToStart ?? 2} PLAYERS`}</span>
               </>
             ) : (
               <>

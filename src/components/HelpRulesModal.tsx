@@ -6,9 +6,26 @@ import { ModalHeader } from './ModalHeader.js';
 interface HelpRulesModalProps {
   isOpen: boolean;
   onClose: () => void;
+  minPlayers?: number;
+  maxCards?: number;
+  totalCards?: number;
+  lobbySeconds?: number;
+  claimSeconds?: number;
+  autoCalls?: number;
+  commissionPercent?: number;
 }
 
-export const HelpRulesModal: React.FC<HelpRulesModalProps> = ({ isOpen, onClose }) => {
+export const HelpRulesModal: React.FC<HelpRulesModalProps> = ({
+  isOpen,
+  onClose,
+  minPlayers = 2,
+  maxCards = 5,
+  totalCards = 200,
+  lobbySeconds = 30,
+  claimSeconds = 5,
+  autoCalls = 3,
+  commissionPercent = 20
+}) => {
   if (!isOpen) return null;
 
   return (
@@ -19,8 +36,8 @@ export const HelpRulesModal: React.FC<HelpRulesModalProps> = ({ isOpen, onClose 
 
         {/* Header */}
         <ModalHeader
-          title="RULES & PAYOUTS"
-          badge="75-BALL CASINO"
+          title="HOW TO PLAY"
+          badge="75-BALL BINGO"
           badgeVariant="yellow"
           onClose={onClose}
           closeTitle="Close Rules"
@@ -35,11 +52,11 @@ export const HelpRulesModal: React.FC<HelpRulesModalProps> = ({ isOpen, onClose 
               <Grid className="w-4 h-4" />
             </div>
             <h3 className="font-arcade font-black text-sm text-white uppercase">
-              1. 5x5 Card Matrix (200 Cards)
+              1. Your Cartela ({totalCards} Numbered Cards)
             </h3>
           </div>
           <p className="text-xs font-arcade text-white/70 leading-relaxed">
-            Every room contains 200 certified unique cards. Each card features 24 numbers distributed across standard casino 75-ball columns:
+            A cartela is a 5x5 card with 24 numbers and a FREE middle square. Each column only holds numbers from its letter:
           </p>
           <div className="grid grid-cols-5 gap-1.5 text-center font-arcade font-black text-xs pt-1">
             <div className="p-2 rounded-xl bg-[#181818] text-[#E8FF00] border border-white/10">
@@ -65,82 +82,106 @@ export const HelpRulesModal: React.FC<HelpRulesModalProps> = ({ isOpen, onClose 
           </div>
         </div>
 
-        {/* Section 2: Winning Patterns */}
+        {/* Section 2: How a round works */}
+        <div className="p-4 rounded-2xl bg-[#111111] border border-white/10 space-y-3 shadow-sm">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-lg bg-[#E8FF00]/15 text-[#E8FF00] flex items-center justify-center border border-[#E8FF00]/30">
+              <Zap className="w-4 h-4" />
+            </div>
+            <h3 className="font-arcade font-black text-sm text-white uppercase">
+              2. How A Round Works
+            </h3>
+          </div>
+          <ol className="space-y-2 font-arcade text-xs list-none">
+            {[
+              ['PICK YOUR CARTELA', `Choose up to ${maxCards} numbered cartelas (1-${totalCards}). A cartela number always has the same numbers, so you can keep your lucky one. You can change your mind and get your money back until the draw starts.`],
+              ['WAIT FOR PLAYERS', `When ${minPlayers} or more players have joined, a ${lobbySeconds}-second countdown starts. If players leave and fewer than ${minPlayers} remain, it waits again.`],
+              ['WATCH THE BALLS', 'Balls from 1 to 75 are called one by one (B 1-15, I 16-30, N 31-45, G 46-60, O 61-75). Numbers on your cartela are marked for you. The middle square is FREE.'],
+              ['PRESS BINGO', 'When you complete a winning pattern, the BINGO button lights up. Press it! The first BINGO wins the prize.'],
+              ['SAME BALL = SHARED PRIZE', `After the first BINGO the game pauses for ${claimSeconds} seconds. Everyone else who also has BINGO can press then, and the prize is split equally between those cartelas.`],
+              ['DON\'T MISS IT', `If your cartela has BINGO and nobody presses within ${autoCalls} more balls, the game calls BINGO for you.`]
+            ].map(([title, body], i) => (
+              <li key={title} className="p-2.5 rounded-xl bg-[#161616] border border-white/5">
+                <div className="font-black text-[#E8FF00]">{i + 1}. {title}</div>
+                <div className="text-[10px] text-white/60 mt-0.5 leading-relaxed">{body}</div>
+              </li>
+            ))}
+          </ol>
+        </div>
+
+        {/* Section 3: Winning Patterns */}
         <div className="p-4 rounded-2xl bg-[#111111] border border-white/10 space-y-3 shadow-sm">
           <div className="flex items-center gap-2">
             <div className="w-7 h-7 rounded-lg bg-[#E8FF00]/15 text-[#E8FF00] flex items-center justify-center border border-[#E8FF00]/30">
               <Trophy className="w-4 h-4" />
             </div>
             <h3 className="font-arcade font-black text-sm text-white uppercase">
-              2. 1st Player To Hit Wins The Pot!
+              3. Winning Patterns
             </h3>
           </div>
           <div className="space-y-2 font-arcade text-xs">
             <div className="p-2.5 rounded-xl bg-[#161616] border border-white/5">
-              <div className="font-black text-[#E8FF00]">STRAIGHT LINES (Row, Column, Diagonal)</div>
-              <div className="text-[10px] text-white/50 mt-0.5">Any 5 numbers in a row, column, or diagonal corner-to-corner.</div>
+              <div className="font-black text-[#E8FF00]">ANY STRAIGHT LINE</div>
+              <div className="text-[10px] text-white/50 mt-0.5">All 5 squares of a row, a column, or a corner-to-corner diagonal. The FREE middle square counts.</div>
             </div>
             <div className="p-2.5 rounded-xl bg-[#161616] border border-white/5">
               <div className="font-black text-[#E8FF00]">FOUR CORNERS</div>
-              <div className="text-[10px] text-white/50 mt-0.5">Daubing the four extreme outer corners of your card.</div>
+              <div className="text-[10px] text-white/50 mt-0.5">The four outer corner squares of your cartela.</div>
             </div>
-            <div className="p-2.5 rounded-xl bg-[#161616] border border-white/5">
-              <div className="font-black text-[#E8FF00]">FULL HOUSE / BLACKOUT</div>
-              <div className="text-[10px] text-white/50 mt-0.5">Daubing all 24 numbers for the ultimate jackpot payout!</div>
+            <div className="p-2.5 rounded-xl bg-rose-950/40 border border-rose-500/30">
+              <div className="font-black text-rose-300">FALSE BINGO = OUT</div>
+              <div className="text-[10px] text-white/60 mt-0.5">A BINGO without a finished pattern puts that cartela out for the rest of the round. Your other cartelas keep playing.</div>
             </div>
           </div>
         </div>
 
-        {/* Section 3: Payout Structure */}
+        {/* Section 4: Payout Structure */}
         <div className="p-4 rounded-2xl bg-[#111111] border border-white/10 space-y-3 shadow-sm">
           <div className="flex items-center gap-2">
             <div className="w-7 h-7 rounded-lg bg-[#E8FF00]/15 text-[#E8FF00] flex items-center justify-center border border-[#E8FF00]/30">
               <ShieldCheck className="w-4 h-4" />
             </div>
             <h3 className="font-arcade font-black text-sm text-white uppercase">
-              3. Payout Formula & 100% Promo
+              4. The Prize (Derash)
             </h3>
           </div>
           <div className="space-y-2 font-arcade text-xs">
-            <div className="p-2.5 rounded-xl bg-[#161616] border border-white/5 flex items-center justify-between">
+            <div className="p-2.5 rounded-xl bg-[#161616] border border-white/5 flex items-center justify-between gap-2">
               <div>
-                <div className="font-black text-white">MINIMUM START THRESHOLD</div>
-                <div className="text-[9px] text-white/40">Minimum cards sold to start the draw</div>
+                <div className="font-black text-white">PRIZE</div>
+                <div className="text-[9px] text-white/40">All cartela stakes in the round, minus {commissionPercent}% commission</div>
               </div>
-              <span className="font-black text-[#E8FF00]">5 CARDS</span>
+              <span className="font-black text-[#E8FF00] shrink-0">{100 - commissionPercent}% TO WINNERS</span>
             </div>
-            <div className="p-2.5 rounded-xl bg-[#161616] border border-white/5 flex items-center justify-between">
-              <div>
-                <div className="font-black text-white">STANDARD WINNER POT (&gt; 5 Cards)</div>
-                <div className="text-[9px] text-white/40">80% to winner, 20% platform rake</div>
-              </div>
-              <span className="font-black text-[#E8FF00]">80% TO WINNER</span>
-            </div>
-            <div className="p-2.5 rounded-xl bg-[#181818] border border-[#E8FF00]/40 flex items-center justify-between shadow-[0_0_10px_rgba(232,255,0,0.15)]">
+            <div className="p-2.5 rounded-xl bg-[#181818] border border-[#E8FF00]/40 flex items-center justify-between gap-2 shadow-[0_0_10px_rgba(232,255,0,0.15)]">
               <div>
                 <div className="font-black text-[#E8FF00] flex items-center gap-1">
                   <Sparkles className="w-3 h-3" />
-                  <span>5-PLAYER PROMO (EXACTLY 5)</span>
+                  <span>SMALL ROUND PROMO</span>
                 </div>
-                <div className="text-[9px] text-white/60">0% Rake! All stakes paid directly to winner</div>
+                <div className="text-[9px] text-white/60">5 cartelas or fewer in the round: no commission at all</div>
               </div>
-              <span className="font-black text-[#E8FF00]">100% POT</span>
+              <span className="font-black text-[#E8FF00] shrink-0">100% POT</span>
+            </div>
+            <div className="p-2.5 rounded-xl bg-[#161616] border border-white/5">
+              <div className="font-black text-white">NO WINNER?</div>
+              <div className="text-[9px] text-white/40">If no cartela can win (for example every cartela was put out), every stake is refunded.</div>
             </div>
           </div>
         </div>
 
-        {/* Section 4: Auto-Daub */}
+        {/* Section 5: Fairness */}
         <div className="p-4 rounded-2xl bg-[#111111] border border-white/10 space-y-2">
           <div className="flex items-center gap-2">
             <div className="w-7 h-7 rounded-lg bg-[#E8FF00]/15 text-[#E8FF00] flex items-center justify-center border border-[#E8FF00]/30">
-              <Zap className="w-4 h-4" />
+              <HelpCircle className="w-4 h-4" />
             </div>
             <h3 className="font-arcade font-black text-sm text-white uppercase">
-              4. Auto-Daub & Certified Fairness
+              5. Certified Fairness
             </h3>
           </div>
           <p className="text-xs font-arcade text-white/60 leading-relaxed">
-            Players can enable Auto-Daub to automatically stamp called numbers in real-time. Every game's ball sequence is locked with a SHA-256 cryptographic hash before ball #1 is drawn.
+            The order of all 75 balls is locked with a SHA-256 fingerprint before ball #1 is drawn and revealed when the round ends, so anyone can check that nothing was changed.
           </p>
         </div>
       </main>

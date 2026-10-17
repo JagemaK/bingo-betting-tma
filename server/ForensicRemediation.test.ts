@@ -498,7 +498,7 @@ describe('Forensic Remediation Verification Suite', () => {
         lobbyDuration: 20,
         drawIntervalMs: 500,
         totalCatalogCards: 200,
-        minCardsToStart: 5
+        minPlayersToStart: 5
       };
 
       const crashedGameId = 'game_crashed_001';

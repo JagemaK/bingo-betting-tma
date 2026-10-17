@@ -374,7 +374,7 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
                         </div>
                       ) : (
                         <div className="flex items-center gap-1 font-arcade text-xs font-bold px-2.5 py-1 rounded-xl bg-white/5 text-white/70 border border-white/10 whitespace-nowrap">
-                          <span>WAITING ({room.totalCardsSold}/{room.minCardsToStart ?? 5})</span>
+                          <span>WAITING ({room.activePlayersCount}/{room.minPlayersToStart ?? 2} PLAYERS)</span>
                         </div>
                       )
                     ) : isDrawing ? (
@@ -401,9 +401,9 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
                     )}
                   </div>
                   <div className="font-arcade text-[11px] sm:text-xs text-white/50 flex items-center gap-1.5 sm:gap-2 truncate whitespace-nowrap">
-                    <span>200 CARDS MAX</span>
+                    <span>UP TO {room.maxCardsPerPlayer ?? 5} CARTELAS</span>
                     <span>·</span>
-                    <span className="text-[#E8FF00] font-bold">1ST BINGO 80-100%</span>
+                    <span className="text-[#E8FF00] font-bold">1ST BINGO WINS</span>
                   </div>
                 </div>
 
@@ -411,11 +411,11 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
                 <div className="flex items-center justify-between font-arcade text-xs px-3.5 py-2.5 rounded-xl bg-[#161616] border border-white/5 mb-4 whitespace-nowrap min-w-0">
                   <div className="flex items-center gap-2 text-white/70 min-w-0 truncate">
                     <Users className="w-3.5 h-3.5 text-[#E8FF00] shrink-0" />
-                    <span className="truncate">CARDS: <strong className="text-white">{room.totalCardsSold} / 200</strong></span>
+                    <span className="truncate">PLAYERS: <strong className="text-white">{room.activePlayersCount}</strong> · CARDS: <strong className="text-white">{room.totalCardsSold}</strong></span>
                   </div>
 
-                  <span className={`font-bold shrink-0 ${room.totalCardsSold >= (room.minCardsToStart || 5) ? 'text-[#E8FF00]' : 'text-white/40'}`}>
-                    {room.totalCardsSold >= (room.minCardsToStart ?? 5) ? 'READY TO DRAW' : `MIN ${room.minCardsToStart ?? 5} CARD${(room.minCardsToStart ?? 5) === 1 ? '' : 'S'}`}
+                  <span className={`font-bold shrink-0 ${room.activePlayersCount >= (room.minPlayersToStart ?? 2) ? 'text-[#E8FF00]' : 'text-white/40'}`}>
+                    {room.activePlayersCount >= (room.minPlayersToStart ?? 2) ? 'READY TO DRAW' : `NEED ${room.minPlayersToStart ?? 2} PLAYERS`}
                   </span>
                 </div>
 

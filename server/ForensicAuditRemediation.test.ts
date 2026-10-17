@@ -177,7 +177,7 @@ describe('Forensic Audit & Remediation Regression Suite', () => {
         lobbyDuration: 20,
         drawIntervalMs: 500,
         totalCatalogCards: 200,
-        minCardsToStart: 5
+        minPlayersToStart: 5
       };
 
       const room = new GameRoomManager(mockIo, roomConfig, databaseService);

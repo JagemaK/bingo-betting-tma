@@ -177,20 +177,20 @@ describe('Phase 3: Game Engine, Provable Fairness & Real-Time Integrity Remediat
         totalCatalogCards: 200
       }, dbService);
 
-      // Add 5 cards to start countdown
-      for (let i = 1; i <= 5; i++) {
+      // Two different players start the countdown
+      for (let i = 4; i <= 5; i++) {
         const uId = `usr_desel_${i}`;
         dbService.createUser({ id: uId, telegram_id: `tg_d_${i}`, username: `DUser_${i}`, referral_code: `REF_D_${i}` });
         dbService.updateWalletBalance(uId, 50);
         await room.selectCardNumber(uId, `DUser_${i}`, i, false);
       }
 
-      expect(room.tickets.size).toBe(5);
+      expect(room.tickets.size).toBe(2);
       expect(room.isCountdownActive).toBe(true);
 
-      // Deselect 1 card -> tickets drop to 4 -> countdown stops
+      // One player leaves -> only 1 player left -> countdown stops
       await room.deselectCardNumber('usr_desel_5', 5);
-      expect(room.tickets.size).toBe(4);
+      expect(room.tickets.size).toBe(1);
       expect(room.isCountdownActive).toBe(false);
       expect(room.lobbyTimeRemaining).toBe(20);
 
@@ -316,7 +316,8 @@ describe('Phase 3: Game Engine, Provable Fairness & Real-Time Integrity Remediat
         rakePercent: 20,
         lobbyDuration: 20,
         drawIntervalMs: 100,
-        totalCatalogCards: 200
+        totalCatalogCards: 200,
+        claimWindowMs: 0
       }, dbService);
 
       const userId = 'usr_winner_01';
@@ -324,14 +325,16 @@ describe('Phase 3: Game Engine, Provable Fairness & Real-Time Integrity Remediat
       dbService.updateWalletBalance(userId, 100);
 
       const ticket = await room.selectCardNumber(userId, 'WinnerPlayer', 1, false);
+      const falseTicket = await room.selectCardNumber(userId, 'WinnerPlayer', 2, false);
 
       // Force game to active status
       room.status = 'active';
 
-      // Attempt claim before balls are drawn -> MUST be rejected
-      const earlyClaim = await room.handleClaimBingo(userId, ticket.ticketId);
+      // Attempt claim before balls are drawn -> MUST be rejected, and that cartela is out for the round
+      const earlyClaim = await room.handleClaimBingo(userId, falseTicket.ticketId);
       expect(earlyClaim.success).toBe(false);
       expect(earlyClaim.message).toMatch(/Invalid Bingo claim/i);
+      expect(room.disqualifiedTickets.has(falseTicket.ticketId)).toBe(true);
 
       // Now draw balls that complete Row 1 of the ticket's grid
       const grid = ticket.grid;

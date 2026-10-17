@@ -2,13 +2,31 @@
 
 Real-time multiplayer 75-ball Bingo for the Ethiopian market, played inside Telegram. Built with **React + Vite + Tailwind** (frontend) and **Node.js / Express + Socket.io + SQLite (`node:sqlite`)** (backend).
 
-- Four live rooms: Starter Lounge (10 Birr), Bronze Room (20), Gold Arena (50), Diamond High-Roller (100). 200 numbered cards per room, 20% rake (0% when exactly 5 players).
+- Four live rooms: Starter Lounge (10 Birr), Bronze Room (20), Gold Arena (50), Diamond High-Roller (100). 200 fixed numbered cartelas, 20% commission (0% when a round has 5 cartelas or fewer).
 - Telebirr deposits and withdrawals, verified manually by agents / super admins.
 - Telegram WebApp HMAC login, phone verification via the bot, phone + password login.
 - SHA-256 committed ball sequence (provably fair), Daily Grand Jackpot, referrals, leaderboards.
 - Agent and Super Admin dashboards.
 
 ---
+
+## 🎱 Game rules
+
+The rules follow the Telegram bingo games popular in Ethiopia:
+
+| Rule | Default | Env var |
+|---|---|---|
+| Players pick numbered **cartelas** (1–200). A number always has the same card (`CARTELA_SEED` sets the deck). | up to 5 per player | `MAX_CARTELAS_PER_PLAYER` |
+| The countdown starts once enough **different players** have joined; it stops if they drop below that. Stakes are refundable until the draw starts. | 2 players, 30 s | `MIN_PLAYERS_TO_START`, `LOBBY_COUNTDOWN_SECONDS` |
+| 75 balls are drawn and marked automatically. | one every 3 s | `DRAW_INTERVAL_MS` |
+| BINGO = any full row, column, diagonal or the four corners (centre is FREE). | | |
+| The first valid BINGO pauses the draw; every cartela that also claims BINGO in that window **shares the prize equally** (split in cents, the leftover cent goes to the first caller). | 5 s | `CLAIM_WINDOW_MS` |
+| A **false BINGO** puts that cartela out for the rest of the round. | | |
+| If a completed cartela isn't claimed, the game calls **auto-BINGO** for the cartela(s) that completed first. | after 3 more balls | `AUTO_BINGO_AFTER_CALLS` (0 = only on the last ball) |
+| Prize (derash) = all stakes minus 20% commission; no commission when the round has 5 cartelas or fewer. | | |
+| If no cartela can win (all were put out), every stake is refunded. | | |
+
+The engine is in `server/GameRoomManager.ts`; the rules are tested in `server/GameRules.test.ts`.
 
 ## 🚀 Local development
 
@@ -67,7 +85,7 @@ Render auto-deploys every commit to `main` through its GitHub App, so merging a 
 | `ALLOWED_ORIGINS` | optional | Extra comma-separated CORS origins |
 | `TRUST_PROXY` | optional | Proxy hops to trust for client IPs (default `1` in production) |
 | `AUTH_RATE_LIMIT_PER_MINUTE` | optional | Auth requests per minute per IP (default 15); raise it if many testers share one network |
-| `MIN_CARDS_TO_START` | optional | Cards needed before a room's countdown starts |
+| `MIN_PLAYERS_TO_START`, `LOBBY_COUNTDOWN_SECONDS`, `MAX_CARTELAS_PER_PLAYER`, `CLAIM_WINDOW_MS`, `AUTO_BINGO_AFTER_CALLS`, `DRAW_INTERVAL_MS`, `CARTELA_SEED` | optional | Game rule settings, see [Game rules](#-game-rules) |
 | `REFERRAL_MIN_DEPOSIT_ETB` | optional | Total approved deposits a referred player needs before the referrer earns a reward (default 100) |
 | `REFERRAL_MIN_CARDS` | optional | Game cards a referred player must buy before qualifying (default 5) |
 | `REFERRAL_MAX_REWARDS_PER_DAY` | optional | Max referral rewards per referrer per rolling 24 hours (default 20) |

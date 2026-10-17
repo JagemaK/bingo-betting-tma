@@ -82,6 +82,75 @@ export function generateCardCatalog(totalCards: number = 200): Map<number, Bingo
 }
 
 /**
+ * Fixed "cartela" card: the same card number always has the same numbers, like the printed
+ * cartelas used in Ethiopian bingo halls, so players can keep playing their lucky number.
+ * Derived from HMAC-SHA256(seed, cardNumber); the seed only changes the deck if CARTELA_SEED changes.
+ */
+export function generateFixedCartela(cardNumber: number, seed: string, variant: number = 0): BingoGrid {
+  const columns: Array<['B' | 'I' | 'N' | 'G' | 'O', number]> = [['B', 1], ['I', 16], ['N', 31], ['G', 46], ['O', 61]];
+  const grid: Partial<BingoGrid> = {};
+
+  for (const [col, min] of columns) {
+    const pool = Array.from({ length: 15 }, (_, i) => min + i);
+    const count = col === 'N' ? 4 : 5;
+    // Partial Fisher-Yates driven by an HMAC stream (rejection sampling avoids modulo bias)
+    let counter = 0;
+    const nextInt = (bound: number) => {
+      const limit = Math.floor(0x100000000 / bound) * bound;
+      for (;;) {
+        const digest = crypto.createHmac('sha256', seed).update(`${cardNumber}:${variant}:${col}:${counter++}`).digest();
+        const value = digest.readUInt32BE(0);
+        if (value < limit) return value % bound;
+      }
+    };
+    for (let i = 0; i < count; i++) {
+      const j = i + nextInt(pool.length - i);
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+    grid[col] = pool.slice(0, count).sort((a, b) => a - b);
+  }
+
+  grid['N']!.splice(2, 0, 0);
+  return grid as BingoGrid;
+}
+
+const cartelaCatalogCache = new Map<string, Map<number, BingoGrid>>();
+
+/**
+ * The shared, fixed cartela deck (1..totalCards). Every card in the deck is unique.
+ */
+export function getCartelaCatalog(totalCards: number = 200, seed: string = process.env.CARTELA_SEED || 'bingobeet-cartelas-v1'): Map<number, BingoGrid> {
+  const cacheKey = `${seed}:${totalCards}`;
+  const cached = cartelaCatalogCache.get(cacheKey);
+  if (cached) return cached;
+
+  const catalog = new Map<number, BingoGrid>();
+  const seen = new Set<string>();
+  for (let n = 1; n <= totalCards; n++) {
+    let variant = 0;
+    let grid = generateFixedCartela(n, seed, variant);
+    while (seen.has(JSON.stringify(grid))) {
+      grid = generateFixedCartela(n, seed, ++variant);
+    }
+    seen.add(JSON.stringify(grid));
+    catalog.set(n, grid);
+  }
+  cartelaCatalogCache.set(cacheKey, catalog);
+  return catalog;
+}
+
+/**
+ * Split a prize equally between winners, in whole cents. Any leftover cent goes to the first winner.
+ */
+export function splitPrize(totalPrize: number, winnerCount: number): number[] {
+  if (winnerCount <= 0) return [];
+  const totalCents = Math.round(totalPrize * 100);
+  const share = Math.floor(totalCents / winnerCount);
+  const remainder = totalCents - share * winnerCount;
+  return Array.from({ length: winnerCount }, (_, i) => (share + (i === 0 ? remainder : 0)) / 100);
+}
+
+/**
  * Professional Casino-Grade GLI-11 75-Ball Caller Generator
  * 
  * Features:
