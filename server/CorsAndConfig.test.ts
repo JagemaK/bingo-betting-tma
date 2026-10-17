@@ -36,6 +36,12 @@ describe('CORS and Origin Validation Suite', () => {
     expect(isOriginAllowed('http://127.0.0.1:3001')).toBe(true);
   });
 
+  it('allows the app\'s own production origin (Socket.io handshakes come from it)', () => {
+    expect(isOriginAllowed('https://bingo-bet-app.onrender.com')).toBe(true);
+    expect(isOriginAllowed('https://bingo-bet-app.onrender.com/')).toBe(true);
+    expect(isOriginAllowed('https://bingo-bet-app.onrender.com.evil.com')).toBe(false);
+  });
+
   it('dynamically allows any *.trycloudflare.com domain', () => {
     expect(isOriginAllowed('https://random-subdomain-1234.trycloudflare.com')).toBe(true);
   });
